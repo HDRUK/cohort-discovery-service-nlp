@@ -59,7 +59,7 @@ def split_candidates(text: str) -> List[str]:
     """
     Split text into candidate phrases based on common clinical separators.
     """
-    splitters = r",| and | with | who has | due to | because of |; "
+    splitters = r", | and | with | who has | due to | because of |; "
     candidates = [s.strip() for s in re.split(splitters, text, flags=re.IGNORECASE) if s.strip()]
     print(f"found candidates {candidates}")
     return candidates
@@ -104,13 +104,15 @@ def extract_entities(payload: QueryRequest, threshold: float = Query(80, descrip
     for candidate in candidates:
         candidate_clean = clean_candidates(candidate)
         matches = fuzzy_resolver.resolve(candidate, threshold)
+        index = payload.query.lower().find(candidate.lower())
+
         for match in matches:
-            key = (match["concept_id"], candidate.lower(), payload.query.lower().find(candidate.lower()))
+            key = (match["concept_id"], candidate.lower(), index)
             if key in seen:
                 continue
             
             seen.add(key)
-            start_idx = payload.query.lower().find(candidate.lower())
+            start_idx = index
             end_idx = start_idx + len(candidate)
             entities.append({
                 "text": candidate,
