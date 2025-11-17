@@ -1,8 +1,8 @@
 # Project Daphne NLP Service
 
-This is a **FastAPI microservice** that uses **medSpaCy** to extract clinical entities from natural language text, ready for mapping to OMOP `concept_id`s.  
+This is a **FastAPI microservice** that uses **RapidFuzz** to match clinical entities from natural language text, to OMOP concepts.  
 
-The service works "out of the box" with medSpaCy’s default pipeline, no custom rules required.
+The service works with no custom rules required, provided you have access to a omop table.
 
 ---
 
@@ -11,7 +11,6 @@ The service works "out of the box" with medSpaCy’s default pipeline, no custom
 - Extracts clinical entities (PROBLEM, PROCEDURE, etc.) from free-text queries.
 - Detects negation for entities.
 - Returns structured JSON for easy integration with other services (like Laravel + OMOP tables).
-- Vanilla medSpaCy pipeline, no static `TargetRules` required.
 
 ---
 

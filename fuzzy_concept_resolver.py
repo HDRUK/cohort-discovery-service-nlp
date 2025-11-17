@@ -3,7 +3,7 @@ import re
 
 def tokenize(text):
     """
-    Simple tokenizer: lowercase, remove punctuation, split on whitespace.
+    Simple tokeniser: lowercase, remove punctuation, split on whitespace.
     """
     text = re.sub(r"[^\w\s]", " ", text)
     return set(text.lower().split())
@@ -19,7 +19,7 @@ class FuzzyConceptResolver:
         self.token_match_ratio = token_match_ratio
         self.concepts = concepts
 
-        # Pre-tokenize each concept's description and name
+        # Pre-tokenise each concept's description and name
         for c in self.concepts:
             c["tokens"] = tokenize(c.get("description") or c.get("concept_name") or "")
 

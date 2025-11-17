@@ -125,5 +125,5 @@ def extract_entities(payload: QueryRequest, threshold: float = Query(80, descrip
 @app.get("/")
 def root():
     return {
-        "message": "Daphne NLP Service running. POST to /extract with {query: 'your text'}"
+        "message": "Cohort Discovery NLP Service running. POST to /extract with {query: 'your text'}"
     }
