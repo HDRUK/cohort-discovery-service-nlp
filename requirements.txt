@@ -1,0 +1,8 @@
+fastapi==0.111.1
+uvicorn[standard]==0.23.2
+medspacy==1.3.1
+spacy>=3.6.0
+pydantic>=2.5.0
+mysql-connector-python
+python-dotenv
+rapidfuzz==3.5.2
