@@ -83,7 +83,7 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
         with:
-          ref: dev # override for branch deployment
+          ref: GAT-1234 # override for branch deployment
 
       - name: Google Auth
         id: auth
