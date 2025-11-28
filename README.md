@@ -1,6 +1,6 @@
 # Project Daphne NLP Service
 
-This is a **FastAPI microservice** that uses **RapidFuzz** to match clinical entities from natural language text, to OMOP concepts. 
+This is a **FastAPI microservice** that uses **RapidFuzz** to match clinical entities from natural language text, to OMOP concepts.  
 
 The service works with no custom rules required, provided you have access to a omop table.
 
