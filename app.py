@@ -25,6 +25,7 @@ DB_CONFIG = {
 }
 
 VIEW_NAME = os.getenv("OMOP_VIEW", "distribution_concepts")
+DEFAULT_THRESHOLD = os.getenv("DEFAULT_THRESHOLD", 60)
 
 
 # ------------------------------------------------------------
@@ -117,7 +118,9 @@ class QueryResponse(BaseModel):
 @app.post("/extract", response_model=QueryResponse)
 async def extract_entities(
     payload: QueryRequest,
-    threshold: float = Query(80, description="Fuzzy match threshold 0-100"),
+    threshold: float = Query(
+        DEFAULT_THRESHOLD, description="Fuzzy match threshold 0-100"
+    ),
     store: ResolverStore = Depends(get_resolver_store),
 ):
     """
