@@ -14,9 +14,6 @@ class ResolverStore:
         self._concepts: List[Dict[str, Any]] = []
         self._resolver: Optional[FuzzyConceptResolver] = None
 
-    def get_concepts(self):
-        return self._concepts
-
     async def get_resolver(self) -> FuzzyConceptResolver:
         now = time.monotonic()
         if self._resolver and (now - self._loaded_at) < self._ttl:
