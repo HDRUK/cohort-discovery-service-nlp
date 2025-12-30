@@ -1,6 +1,6 @@
 # Project Daphne NLP Service
 
-This is a **FastAPI microservice** that uses **RapidFuzz** to match clinical entities from natural language text, to OMOP concepts.  
+This is a **FastAPI microservice** that uses **RapidFuzz** to match clinical entities from natural language text, to OMOP concepts.
 
 The service works with no custom rules required, provided you have access to a omop table.
 
@@ -33,7 +33,23 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 3. Install dependencies
 
 ```bash
-php install -r requirements.txt
+pip install pip --upgrade
+pip install -r requirements.txt
+```
+
+4. Setup `.env`
+
+```bash
+DB_HOST=
+DB_PORT=
+DB_NAME=
+DB_USER=
+DB_PASS=
+
+
+OMOP_VIEW=
+APP_ENV=development
+APP_DEBUG=true
 ```
 
 ## Running the service
@@ -43,12 +59,12 @@ uvicorn app:app --host=0.0.0.0 --port=5001 --reload
 ```
 
 - GET `/` - Health check
-- POST `/parse` - Endpoint for NLP queries
+- POST `/extract` - Endpoint for NLP queries
 
 ## Example request
 
 ```curl
-curl -X POST http://localhost:5001/parse \
+curl -X POST http://localhost:5001/extract \
   -H "Content-Type: application/json" \
   -d '{"query": "Chronic kidney disease stage 3A due to type 2 diabetes mellitus"}'
 ```

@@ -1,16 +1,19 @@
 import os
 import re
 import string
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 import mysql.connector
 
-from fuzzy_concept_resolver import FuzzyConceptResolver
+from contextlib import asynccontextmanager
+from store import ResolverStore
 
 # Load environment variables
 load_dotenv()
+
+STORE_REFRESH_TTL = os.getenv("STORE_REFRESH_TTL", 60)
 
 # MySQL config
 DB_CONFIG = {
@@ -23,8 +26,6 @@ DB_CONFIG = {
 
 VIEW_NAME = os.getenv("OMOP_VIEW", "distribution_concepts")
 
-# FastAPI app
-app = FastAPI(title="Project Daphne NLP Service", version="1.0")
 
 # ------------------------------------------------------------
 # Load OMOP concepts from MySQL
@@ -50,34 +51,53 @@ def load_concepts_from_mysql():
     conn.close()
     return concepts
 
-concepts = load_concepts_from_mysql()
-print(f"[Start-up] Loaded {len(concepts)} OMOP concepts from `{VIEW_NAME}`")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    store = ResolverStore(load_concepts_from_mysql, ttl_seconds=STORE_REFRESH_TTL)
+    resolver = await store.get_resolver()
+    app.state.resolver_store = store
+    print(
+        f"[Start-up] Loaded FuzzyConceptResolver (concepts={len(resolver.concepts)}) from `{VIEW_NAME}`"
+    )
+    yield
+
+
+def get_resolver_store(request: Request) -> ResolverStore:
+    return request.app.state.resolver_store
+
+
+# FastAPI app
+app = FastAPI(title="Project Daphne NLP Service", version="1.0", lifespan=lifespan)
+
 
 # ------------------------------------------------------------
+
 
 def split_candidates(text: str) -> List[str]:
     """
     Split text into candidate phrases based on common clinical separators.
     """
     splitters = r", | and | with | who has | due to | because of |; "
-    candidates = [s.strip() for s in re.split(splitters, text, flags=re.IGNORECASE) if s.strip()]
+    candidates = [
+        s.strip() for s in re.split(splitters, text, flags=re.IGNORECASE) if s.strip()
+    ]
     print(f"found candidates {candidates}")
     return candidates
+
 
 def clean_candidates(text: str) -> str:
     text = text.translate(str.maketrans("", "", string.punctuation))
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
-# ------------------------------------------------------------
-fuzzy_resolver = FuzzyConceptResolver(concepts)
-print(f"[Start-up] Loaded FuzzyConceptResolver with default threshold {fuzzy_resolver.threshold}")
 
 # ------------------------------------------------------------
 # Pydantic models
 # ------------------------------------------------------------
 class QueryRequest(BaseModel):
     query: str
+
 
 class Entity(BaseModel):
     text: str
@@ -86,43 +106,53 @@ class Entity(BaseModel):
     end: int
     attributes: Dict[str, Any]
 
+
 class QueryResponse(BaseModel):
     entities: List[Entity]
+
 
 # ------------------------------------------------------------
 # Endpoints
 # ------------------------------------------------------------
 @app.post("/extract", response_model=QueryResponse)
-def extract_entities(payload: QueryRequest, threshold: float = Query(80, description="Fuzzy match threshold 0-100")):
+async def extract_entities(
+    payload: QueryRequest,
+    threshold: float = Query(80, description="Fuzzy match threshold 0-100"),
+    store: ResolverStore = Depends(get_resolver_store),
+):
     """
     Extract clinical concepts from query using fuzzy matching.
     """
+    resolver = await store.get_resolver()
     candidates = split_candidates(payload.query)
     entities = []
     seen = set()
 
     for candidate in candidates:
         candidate_clean = clean_candidates(candidate)
-        matches = fuzzy_resolver.resolve(candidate, threshold)
+        matches = resolver.resolve(candidate_clean, threshold)
         index = payload.query.lower().find(candidate.lower())
 
         for match in matches:
             key = (match["concept_id"], candidate.lower(), index)
             if key in seen:
                 continue
-            
+
             seen.add(key)
             start_idx = index
             end_idx = start_idx + len(candidate)
-            entities.append({
-                "text": candidate,
-                "label": match["domain_id"],
-                "start": start_idx,
-                "end": end_idx,
-                "attributes": match
-            })
+            entities.append(
+                {
+                    "text": candidate,
+                    "label": match["domain_id"],
+                    "start": start_idx,
+                    "end": end_idx,
+                    "attributes": match,
+                }
+            )
 
     return {"entities": entities}
+
 
 @app.get("/")
 def root():
