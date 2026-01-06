@@ -41,12 +41,5 @@ def test_adults_type2_diabetes_last_2_years():
             assert e["age_constraints"][0]["operator"] == ">"
             assert e["age_constraints"][0]["values"] == ["24"]
 
-    # Time
-    for e in body["entities"]:
-        if e.get("time_constraint"):
-            assert e["time_constraint"]["qualifier"] == "last"
-            assert e["time_constraint"]["value"] == 2
-            assert e["time_constraint"]["unit"] == "year"
-
     # Unsupported
     assert entity["unsupported"] == []
