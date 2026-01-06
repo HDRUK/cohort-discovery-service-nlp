@@ -35,11 +35,11 @@ class FuzzyConceptResolver:
         Controls token coverage requirement; higher values enforce stricter overlap.
     extra_token_penalty : float
         Penalty per extra concept token relative to query size (default: 0.3).
-        Penalizes overly specific concepts; scaled by query length to normalize for longer inputs.
+        Penalises overly specific concepts; scaled by query length to normalise for longer inputs.
     """
     def __init__(self, concepts, threshold=70, token_match_ratio=0.3, extra_token_penalty=0.3):
         """
-        Initialize resolver with concepts and matching parameters.
+        Initialise resolver with concepts and matching parameters.
         
         Parameters:
         -----------
@@ -82,8 +82,8 @@ class FuzzyConceptResolver:
             Each concept dict includes all original fields plus a 'match_score' field.
             The score is adjusted by:
             - Token overlap ratio: requires significant overlap of tokens between input and concept
-            - Extra token penalty: penalizes concepts with many irrelevant tokens relative to query size
-            - Downstream token penalty: penalizes presence of complication/secondary language
+            - Extra token penalty: penalises concepts with many irrelevant tokens relative to query size
+            - Downstream token penalty: penalises presence of complication/secondary language
         """
         if not text or not self.concepts:
             return []
