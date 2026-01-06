@@ -15,7 +15,7 @@ def tokenize(text):
 
 class FuzzyConceptResolver:
     """
-    Fuzzy matcher for resolving natural language text to standardized concepts.
+    Fuzzy matcher for resolving natural language text to standardised concepts.
     
     Performs multi-stage matching combining token-based overlap and fuzzy string similarity,
     with adjustable penalties for irrelevant tokens and domain-specific language patterns.
@@ -26,7 +26,7 @@ class FuzzyConceptResolver:
         Reference list of concepts to match against. Each dict should contain:
         - concept_name or description: text to match (one or both required)
         - concept_id, domain_id, etc.: additional metadata preserved in results
-        - tokens (added during init): pre-tokenized form of concept text for fast lookup
+        - tokens (added during init): pre-tokenised form of concept text for fast lookup
     threshold : float
         Minimum fuzzy similarity score (0-100) required for a match (default: 70).
         Applied after penalty adjustments; can be overridden per-query.
@@ -69,7 +69,7 @@ class FuzzyConceptResolver:
         -----------
         text : str
             The input text to resolve against the concept list.
-            Tokenized internally to extract key terms for matching.
+            Tokenised internally to extract key terms for matching.
         threshold : float, optional
             Minimum fuzzy similarity score (0-100) to consider a match.
             If None, defaults to the instance-level threshold set during initialization.
