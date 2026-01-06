@@ -1,6 +1,7 @@
 import os
 import re
 import string
+from datetime import timedelta
 from fastapi import FastAPI, Query, Request, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
@@ -25,7 +26,7 @@ DB_CONFIG = {
 }
 
 VIEW_NAME = os.getenv("OMOP_VIEW", "distribution_concepts")
-DEFAULT_THRESHOLD = os.getenv("DEFAULT_THRESHOLD", 60)
+DEFAULT_THRESHOLD = os.getenv("DEFAULT_THRESHOLD", 90)
 
 
 # ------------------------------------------------------------
@@ -92,6 +93,36 @@ def clean_candidates(text: str) -> str:
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
+def is_negated(text: str) -> bool:
+    """
+    Returns True if any negation term appears as a whole word in the text.
+    """
+    for term in NEGATION_TERMS:
+        if re.search(rf"\b{re.escape(term)}\b", text, re.IGNORECASE):
+            print(f"Negation term matched: '{term}' in '{text}'")
+            return True
+    return False
+
+
+NEGATION_TERMS = {"no", "not", "without", "never"}
+AGE_PATTERNS = [
+    (re.compile(r"under\s+(\d+)", re.I), "<"),
+    (re.compile(r"over\s+(\d+)", re.I), ">"),
+    (re.compile(r"(\d+)\+", re.I), ">="),
+    (re.compile(r"aged\s+(\d+)[--](\d+)", re.I), "range"),
+]
+TIME_PATTERN = re.compile(
+    r"(last|past|within)\s+(\d+)\s+(day|days|week|weeks|month|months|year|years)",
+    re.I,
+)
+
+UNSUPPORTED_PATTERNS = {
+    "visit": re.compile(r"\b(visit|gp|hospital|admitted)\b", re.I),
+    "sequence": re.compile(r"\b(after|before|later|followed by)\b", re.I),
+    "location": re.compile(r"\b(regions|region|england|scotland|wales)\b", re.I),
+    "measurement": re.compile(r"\b(above|below|mmol|value)\b", re.I),
+}
+
 
 # ------------------------------------------------------------
 # Pydantic models
@@ -106,10 +137,14 @@ class Entity(BaseModel):
     start: int
     end: int
     attributes: Dict[str, Any]
+    age_constraints: List[Dict[str, Any]] = []
+    time_constraint: Optional[Dict[str, Any]] = None
+    negated: bool = False
 
 
 class QueryResponse(BaseModel):
     entities: List[Entity]
+    warnings: List[str] = []
 
 
 # ------------------------------------------------------------
@@ -130,32 +165,93 @@ async def extract_entities(
     candidates = split_candidates(payload.query)
     entities = []
     seen = set()
+    entity_age_constraints = []
+    warnings = []
 
     for candidate in candidates:
         candidate_clean = clean_candidates(candidate)
+
+        # Negation
+        negated = is_negated(candidate)
+
+        print(f"Processing candidate: '{candidate}' (clean: '{candidate_clean}'), negated={negated}")
+
+        # Age constraints
+        age_constraints = []
+        for pattern, op in AGE_PATTERNS:
+            m = pattern.search(candidate)
+            if m:
+                age_constraints.append({"operator": op, "values": list(m.groups())})
+
+        entity_age_constraints = age_constraints
+
+        # Time constraints
+        time_constraint = None
+        m = TIME_PATTERN.search(candidate)
+        if m:
+            time_constraint = {
+                "qualifier": m.group(1).lower(),
+                "value": int(m.group(2)),
+                "unit": m.group(3).lower(),
+            }
+
+        # Unsupported concepts
+        unsupported = [
+            name for name, pattern in UNSUPPORTED_PATTERNS.items() if pattern.search(candidate)
+        ]
+
+        for feature in unsupported:
+            warnings.append(f"{feature.capitalize()}-based filtering is not currently supported.")
+
+        # Resolve concepts
         matches = resolver.resolve(candidate_clean, threshold)
         index = payload.query.lower().find(candidate.lower())
+
+        ## LS - Not needed, as this will default to creating a 'condition' based on the query context
+        ## in the event of no matches. Causes some confusion. Left in for completeness.
+        ##
+        # if not matches:
+        #     # No matches found, still record the candidate
+        #     index = payload.query.lower().find(candidate.lower())
+        #     start_idx = index
+        #     end_idx = start_idx + len(candidate)
+
+        #     entities.append({
+        #         "text": candidate,
+        #         "label": None,
+        #         "start": start_idx,
+        #         "end": end_idx,
+        #         "negated": negated,
+        #         "age_constraints": entity_age_constraints if entity_age_constraints is not None else [],
+        #         "time_constraint": time_constraint,
+        #         "attributes": {},
+        #     })
+        #     continue
 
         for match in matches:
             key = (match["concept_id"], candidate.lower(), index)
             if key in seen:
                 continue
-
             seen.add(key)
+
             start_idx = index
             end_idx = start_idx + len(candidate)
-            entities.append(
-                {
-                    "text": candidate,
-                    "label": match["domain_id"],
-                    "start": start_idx,
-                    "end": end_idx,
-                    "attributes": match,
-                }
-            )
 
-    return {"entities": entities}
+            entities.append({
+                "text": candidate,
+                "label": match.get("domain_id"),
+                "start": start_idx,
+                "end": end_idx,
+                "negated": negated,
+                "age_constraints": entity_age_constraints if entity_age_constraints is not None else [],
+                "time_constraint": time_constraint,
+                "attributes": match,
+            })
 
+    return {
+        "entities": entities,
+        "warnings": warnings,
+    }
 
 @app.get("/")
 def root():
