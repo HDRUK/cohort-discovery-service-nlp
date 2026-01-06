@@ -111,10 +111,6 @@ AGE_PATTERNS = [
     (re.compile(r"(\d+)\+", re.I), ">="),
     (re.compile(r"aged\s+(\d+)[--](\d+)", re.I), "range"),
 ]
-TIME_PATTERN = re.compile(
-    r"(last|past|within)\s+(\d+)\s+(day|days|week|weeks|month|months|year|years)",
-    re.I,
-)
 
 UNSUPPORTED_PATTERNS = {
     "visit": re.compile(r"\b(visit|gp|hospital|admitted)\b", re.I),
@@ -138,7 +134,6 @@ class Entity(BaseModel):
     end: int
     attributes: Dict[str, Any]
     age_constraints: List[Dict[str, Any]] = []
-    time_constraint: Optional[Dict[str, Any]] = None
     negated: bool = False
 
 
@@ -185,16 +180,6 @@ async def extract_entities(
 
         entity_age_constraints = age_constraints
 
-        # Time constraints
-        time_constraint = None
-        m = TIME_PATTERN.search(candidate)
-        if m:
-            time_constraint = {
-                "qualifier": m.group(1).lower(),
-                "value": int(m.group(2)),
-                "unit": m.group(3).lower(),
-            }
-
         # Unsupported concepts
         unsupported = [
             name for name, pattern in UNSUPPORTED_PATTERNS.items() if pattern.search(candidate)
@@ -223,7 +208,6 @@ async def extract_entities(
         #         "end": end_idx,
         #         "negated": negated,
         #         "age_constraints": entity_age_constraints if entity_age_constraints is not None else [],
-        #         "time_constraint": time_constraint,
         #         "attributes": {},
         #     })
         #     continue
@@ -244,7 +228,6 @@ async def extract_entities(
                 "end": end_idx,
                 "negated": negated,
                 "age_constraints": entity_age_constraints if entity_age_constraints is not None else [],
-                "time_constraint": time_constraint,
                 "attributes": match,
             })
 
