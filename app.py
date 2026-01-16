@@ -151,6 +151,9 @@ async def extract_entities(
     threshold: float = Query(
         DEFAULT_THRESHOLD, description="Fuzzy match threshold 0-100"
     ),
+    phrase_first: bool = Query(
+        True, description="Prefer phrase overlap when token matching is available"
+    ),
     store: ResolverStore = Depends(get_resolver_store),
 ):
     """
@@ -189,7 +192,7 @@ async def extract_entities(
             warnings.append(f"{feature.capitalize()}-based filtering is not currently supported.")
 
         # Resolve concepts
-        matches = resolver.resolve(candidate_clean, threshold)
+        matches = resolver.resolve(candidate_clean, threshold, phrase_first=phrase_first)
         index = payload.query.lower().find(candidate.lower())
 
         ## LS - Not needed, as this will default to creating a 'condition' based on the query context
