@@ -6,7 +6,7 @@ DOWNSTREAM_TOKENS = {
     "stage", "chronic",  "disease", "failure", "disorder"
 }
 
-def normalize_text(text):
+def normalise_text(text):
     """
     Light normalisation to reduce token fragmentation without heavy mapping.
     """
@@ -16,11 +16,11 @@ def normalize_text(text):
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
-def tokenize(text):
+def tokenise(text):
     """
     Tokeniser: normalise, split into unigrams, add short phrases (2-3 grams).
     """
-    text = normalize_text(text)
+    text = normalise_text(text)
     tokens = text.split()
     unigrams = set(tokens)
     phrases = set()
@@ -78,7 +78,7 @@ class FuzzyConceptResolver:
 
         # Pre-tokenise each concept's name first, description second
         for c in self.concepts:
-            unigrams, phrases = tokenize(c.get("concept_name") or c.get("description") or "")
+            unigrams, phrases = tokenise(c.get("concept_name") or c.get("description") or "")
             c["tokens"] = unigrams
             c["phrase_tokens"] = phrases
 
@@ -117,8 +117,8 @@ class FuzzyConceptResolver:
         if phrase_first is None:
             phrase_first = self.phrase_first
 
-        candidate_unigrams, candidate_phrases = tokenize(text)
-        candidate_norm = normalize_text(text)
+        candidate_unigrams, candidate_phrases = tokenise(text)
+        candidate_norm = normalise_text(text)
         candidate_token_count = len(candidate_unigrams)
         results = []
 
@@ -140,7 +140,7 @@ class FuzzyConceptResolver:
                 continue  # skip concepts that don't cover enough tokens
 
             concept_text = concept.get("concept_name") or concept.get("description") or ""
-            concept_norm = normalize_text(concept_text)
+            concept_norm = normalise_text(concept_text)
             raw_score = fuzz.WRatio(candidate_norm, concept_norm)
             if candidate_token_count <= 2:
                 # Short queries benefit from partial matching against longer concept text.
