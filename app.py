@@ -80,7 +80,11 @@ def split_candidates(text: str) -> List[str]:
     """
     Split text into candidate phrases based on common clinical separators.
     """
-    splitters = r", | and | with | who has | due to | because of |; "
+    splitters = (
+        r", | and | with | who have | who has | who received | who have received | who has received |"
+        r" who've | who has been | who have been | who were given | who got | patients who | people who |"
+        r" due to | because of |; "
+    )
     candidates = [
         s.strip() for s in re.split(splitters, text, flags=re.IGNORECASE) if s.strip()
     ]
@@ -89,8 +93,25 @@ def split_candidates(text: str) -> List[str]:
 
 
 def clean_candidates(text: str) -> str:
-    text = text.translate(str.maketrans("", "", string.punctuation))
+    # Preserve hyphens so tokens like "covid-19" remain intact.
+    punctuation = string.punctuation.replace("-", "")
+    text = text.translate(str.maketrans("", "", punctuation))
     text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+def strip_leading_verbs(text: str) -> str:
+    """
+    Remove leading ingestion/administration verbs that dilute concept matching.
+    """
+    text = text.strip()
+    # Only strip when the verb is at the very start to avoid over-splitting.
+    patterns = [
+        r"^(received|got|given|administered)\s+",
+        r"^vaccinated\s+with\s+",
+        r"^vaccination\s+with\s+",
+    ]
+    for pattern in patterns:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
     return text.strip()
 
 def is_negated(text: str) -> bool:
@@ -167,7 +188,7 @@ async def extract_entities(
     warnings = []
 
     for candidate in candidates:
-        candidate_clean = clean_candidates(candidate)
+        candidate_clean = strip_leading_verbs(clean_candidates(candidate))
 
         # Negation
         negated = is_negated(candidate)
