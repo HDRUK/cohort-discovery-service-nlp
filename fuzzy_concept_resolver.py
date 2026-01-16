@@ -6,12 +6,28 @@ DOWNSTREAM_TOKENS = {
     "stage", "chronic",  "disease", "failure", "disorder"
 }
 
+def normalize_text(text):
+    """
+    Light normalisation to reduce token fragmentation without heavy mapping.
+    """
+    text = text.lower().strip()
+    text = re.sub(r"[/\-]", " ", text)
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
 def tokenize(text):
     """
-    Simple tokeniser: lowercase, remove punctuation, split on whitespace.
+    Tokeniser: normalise, split into unigrams, add short phrases (2-3 grams).
     """
-    text = re.sub(r"[^\w\s]", " ", text)
-    return set(text.lower().split())
+    text = normalize_text(text)
+    tokens = text.split()
+    unigrams = set(tokens)
+    phrases = set()
+    for n in (2, 3):
+        for i in range(len(tokens) - n + 1):
+            phrases.add(" ".join(tokens[i:i + n]))
+    return unigrams, phrases
 
 class FuzzyConceptResolver:
     """
@@ -37,7 +53,7 @@ class FuzzyConceptResolver:
         Penalty per extra concept token relative to query size (default: 0.3).
         Penalises overly specific concepts; scaled by query length to normalise for longer inputs.
     """
-    def __init__(self, concepts, threshold=70, token_match_ratio=0.3, extra_token_penalty=0.3):
+    def __init__(self, concepts, threshold=70, token_match_ratio=0.3, extra_token_penalty=0.3, phrase_first=True):
         """
         Initialise resolver with concepts and matching parameters.
         
@@ -51,17 +67,22 @@ class FuzzyConceptResolver:
             Fraction of tokens that must match (0.0-1.0). Default: 0.3.
         extra_token_penalty : float, optional
             Penalty per extra concept token. Default: 0.3.
+        phrase_first : bool, optional
+            If True, prefer phrase overlap for token ratio when available.
         """
         self.threshold = threshold
         self.token_match_ratio = token_match_ratio
         self.extra_token_penalty = extra_token_penalty
+        self.phrase_first = phrase_first
         self.concepts = concepts
 
         # Pre-tokenise each concept's name first, description second
         for c in self.concepts:
-            c["tokens"] = tokenize(c.get("concept_name") or c.get("description") or "")
+            unigrams, phrases = tokenize(c.get("concept_name") or c.get("description") or "")
+            c["tokens"] = unigrams
+            c["phrase_tokens"] = phrases
 
-    def resolve(self, text, threshold=None):
+    def resolve(self, text, threshold=None, phrase_first=None):
         """
         Fuzzy match input text against concepts and return ranked matches.
         
@@ -74,6 +95,9 @@ class FuzzyConceptResolver:
             Minimum fuzzy similarity score (0-100) to consider a match.
             If None, defaults to the instance-level threshold set during initialization.
             Controls how strict the matching criteria are; lower values increase recall but decrease precision.
+        phrase_first : bool, optional
+            If True, prefer phrase overlap for token ratio when available.
+            Defaults to the instance-level setting.
         
         Returns:
         --------
@@ -90,24 +114,37 @@ class FuzzyConceptResolver:
 
         if threshold is None:
             threshold = self.threshold
+        if phrase_first is None:
+            phrase_first = self.phrase_first
 
-        candidate_tokens = tokenize(text)
+        candidate_unigrams, candidate_phrases = tokenize(text)
+        candidate_norm = normalize_text(text)
+        candidate_token_count = len(candidate_unigrams)
         results = []
 
         for concept in self.concepts:
             concept_tokens = concept["tokens"]
+            concept_phrases = concept.get("phrase_tokens", set())
             # Ensure significant overlap
             if not concept_tokens:
                 continue
 
-            overlap = candidate_tokens & concept_tokens
-            token_ratio = len(overlap) / max(len(candidate_tokens), 1)
+            if phrase_first and candidate_phrases and concept_phrases:
+                overlap = candidate_phrases & concept_phrases
+                token_ratio = len(overlap) / max(len(candidate_phrases), 1)
+            else:
+                overlap = candidate_unigrams & concept_tokens
+                token_ratio = len(overlap) / max(len(candidate_unigrams), 1)
 
             if token_ratio < self.token_match_ratio:
                 continue  # skip concepts that don't cover enough tokens
 
             concept_text = concept.get("concept_name") or concept.get("description") or ""
-            raw_score = fuzz.WRatio(text.lower(), concept_text.lower())
+            concept_norm = normalize_text(concept_text)
+            raw_score = fuzz.WRatio(candidate_norm, concept_norm)
+            if candidate_token_count <= 2:
+                # Short queries benefit from partial matching against longer concept text.
+                raw_score = max(raw_score, fuzz.partial_ratio(candidate_norm, concept_norm))
 
             if raw_score < threshold:
                 continue
@@ -130,12 +167,12 @@ class FuzzyConceptResolver:
             as alterantive matches, which may be significantly reduced by these penalties.
             """
             # Penalise surplus specificity gently, scaled by query size
-            extra_tokens = concept_tokens - candidate_tokens
-            score -= (len(extra_tokens) / max(len(candidate_tokens), 1)) * self.extra_token_penalty
+            extra_tokens = concept_tokens - candidate_unigrams
+            score -= (len(extra_tokens) / max(len(candidate_unigrams), 1)) * self.extra_token_penalty
 
             # Penalise downstream / complication language
             downstream_hits = concept_tokens & DOWNSTREAM_TOKENS
-            score -= len(downstream_hits) * 1.5
+            score -= len(downstream_hits) * self.extra_token_penalty
 
             if score >= threshold:
                 result = dict(concept)
