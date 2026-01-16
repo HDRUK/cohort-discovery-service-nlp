@@ -1,4 +1,5 @@
 from rapidfuzz import fuzz
+import os
 import re
 
 DOWNSTREAM_TOKENS = {
@@ -75,6 +76,8 @@ class FuzzyConceptResolver:
         self.extra_token_penalty = extra_token_penalty
         self.phrase_first = phrase_first
         self.concepts = concepts
+        self.log_matches = os.getenv("LOG_RESOLVER_MATCHES", "false").lower() in {"1", "true", "yes", "on"}
+        self.log_match_limit = int(os.getenv("LOG_RESOLVER_MATCH_LIMIT", 50))
 
         # Pre-tokenise each concept's name first, description second
         for c in self.concepts:
@@ -121,6 +124,13 @@ class FuzzyConceptResolver:
         candidate_norm = normalise_text(text)
         candidate_token_count = len(candidate_unigrams)
         results = []
+        logged = 0
+
+        if self.log_matches:
+            print(
+                f"Resolving candidate '{text}' against {len(self.concepts)} concepts "
+                f"(log limit={self.log_match_limit})"
+            )
 
         for concept in self.concepts:
             concept_tokens = concept["tokens"]
@@ -135,6 +145,30 @@ class FuzzyConceptResolver:
             else:
                 overlap = candidate_unigrams & concept_tokens
                 token_ratio = len(overlap) / max(len(candidate_unigrams), 1)
+
+            if self.log_matches and logged < self.log_match_limit:
+                concept_text = concept.get("concept_name") or concept.get("description") or ""
+                concept_norm = normalise_text(concept_text)
+                raw_score = fuzz.WRatio(candidate_norm, concept_norm)
+                if candidate_token_count <= 2:
+                    raw_score = max(raw_score, fuzz.partial_ratio(candidate_norm, concept_norm))
+
+                score = raw_score
+                extra_tokens = concept_tokens - candidate_unigrams
+                score -= (len(extra_tokens) / max(len(candidate_unigrams), 1)) * self.extra_token_penalty
+                downstream_hits = concept_tokens & DOWNSTREAM_TOKENS
+                score -= len(downstream_hits) * self.extra_token_penalty
+
+                token_ok = token_ratio >= self.token_match_ratio
+                raw_ok = raw_score >= threshold
+                score_ok = score >= threshold and token_ok and raw_ok
+                print(
+                    f"Checking candidate '{text}' vs concept_id={concept.get('concept_id')}, "
+                    f"concept_name='{concept_text}', token_ratio={token_ratio:.3f}, "
+                    f"raw_score={raw_score:.2f}, final_score={score:.2f}, "
+                    f"token_ok={token_ok}, raw_ok={raw_ok}, score_ok={score_ok}"
+                )
+                logged += 1
 
             if token_ratio < self.token_match_ratio:
                 continue  # skip concepts that don't cover enough tokens
@@ -181,4 +215,6 @@ class FuzzyConceptResolver:
 
         # Sort by score descending
         results.sort(key=lambda x: x["match_score"], reverse=True)
+        if self.log_matches and logged >= self.log_match_limit:
+            print(f"Resolver concept logging truncated at {self.log_match_limit} concepts")
         return results
