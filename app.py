@@ -1,6 +1,8 @@
 import os
 import re
 import string
+import time
+import sys
 from datetime import timedelta
 from fastapi import FastAPI, Query, Request, Depends
 from pydantic import BaseModel
@@ -33,11 +35,19 @@ DEFAULT_THRESHOLD = os.getenv("DEFAULT_THRESHOLD", 90)
 # Load OMOP concepts from MySQL
 # ------------------------------------------------------------
 def load_concepts_from_mysql():
+    start_time = time.time()
+    
+    # Connection phase
+    conn_start = time.time()
     conn = mysql.connector.connect(**DB_CONFIG)
     cursor = conn.cursor(dictionary=True)
+    conn_time = time.time() - conn_start
+    
+    # Query execution phase
+    query_start = time.time()
     cursor.execute(f"""
         SELECT
-            concept_id,
+            DISTINCT(concept_id),
             concept_name,
             description,
             domain_id,
@@ -49,8 +59,30 @@ def load_concepts_from_mysql():
             concept_name IS NOT NULL
             OR description IS NOT NULL;
     """)
+    query_time = time.time() - query_start
+    
+    # Fetch phase
+    fetch_start = time.time()
     concepts = cursor.fetchall()
+    fetch_time = time.time() - fetch_start
+    
     conn.close()
+    
+    total_time = time.time() - start_time
+    
+    # Estimate memory usage (rough approximation)
+    concepts_size = sys.getsizeof(concepts)
+    
+    # Print profiling information
+    print(f"\n[Profiling] load_concepts_from_mysql")
+    print(f"  - Connection time: {conn_time*1000:.2f}ms")
+    print(f"  - Query execution time: {query_time*1000:.2f}ms")
+    print(f"  - Fetch time: {fetch_time*1000:.2f}ms")
+    print(f"  - Total time: {total_time*1000:.2f}ms")
+    print(f"  - Concepts loaded: {len(concepts)}")
+    print(f"  - Estimated memory: {concepts_size / 1024 / 1024:.2f}MB")
+    print(f"  - TTL: {STORE_REFRESH_TTL}s\n")
+    
     return concepts
 
 
