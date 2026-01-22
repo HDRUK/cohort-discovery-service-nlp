@@ -21,7 +21,7 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
         with:
-          token:  ${{ secrets.GH_TOKEN }}
+          token: ${{ secrets.GH_TOKEN }}
           ref: main
           fetch-depth: 0
 
@@ -41,8 +41,8 @@ jobs:
 
       - name: Set Git config
         run: |
-            git config --local user.email "actions@github.com"
-            git config --local user.name "Github Actions"
+          git config --local user.email "actions@github.com"
+          git config --local user.name "Github Actions"
 
       - name: Fetch latest changes from main
         run: |
