@@ -13,7 +13,7 @@ env:
   SLACK_CHANNEL: "${{ secrets.GITHUBACTIONS_SLACK_CHANNEL }}"
 
 jobs:
-  semantic: 
+  semantic:
     permissions: write-all
     runs-on: ubuntu-latest
     steps:
