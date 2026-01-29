@@ -146,6 +146,14 @@ def strip_leading_verbs(text: str) -> str:
         text = re.sub(pattern, "", text, flags=re.IGNORECASE)
     return text.strip()
 
+def apply_demographic_patterns(text: str) -> str:
+    """
+    Replace demographic wording with canonical tokens for matching.
+    """
+    for pattern, replacement in DEMOGRAPHC_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text.strip()
+
 def is_negated(text: str) -> bool:
     """
     Returns True if any negation term appears as a whole word in the text.
@@ -163,6 +171,13 @@ AGE_PATTERNS = [
     (re.compile(r"over\s+(\d+)", re.I), ">"),
     (re.compile(r"(\d+)\+", re.I), ">="),
     (re.compile(r"aged\s+(\d+)[--](\d+)", re.I), "range"),
+]
+
+DEMOGRAPHC_PATTERNS = [
+    (re.compile(r"\bmales\b", re.I), "MALE"),
+    (re.compile(r"\bmen\b", re.I), "MALE"),
+    (re.compile(r"\bwomen\b", re.I), "FEMALE"),
+    (re.compile(r"\bfemales\b", re.I), "FEMALE"),
 ]
 
 UNSUPPORTED_PATTERNS = {
@@ -221,11 +236,14 @@ async def extract_entities(
 
     for candidate in candidates:
         candidate_clean = strip_leading_verbs(clean_candidates(candidate))
+        candidate_normalised = apply_demographic_patterns(candidate_clean)
 
         # Negation
         negated = is_negated(candidate)
 
-        print(f"Processing candidate: '{candidate}' (clean: '{candidate_clean}'), negated={negated}")
+        print(
+            f"Processing candidate: '{candidate}' (clean: '{candidate_clean}', normalised: '{candidate_normalised}'), negated={negated}"
+        )
 
         # Age constraints
         age_constraints = []
@@ -245,7 +263,7 @@ async def extract_entities(
             warnings.append(f"{feature.capitalize()}-based filtering is not currently supported.")
 
         # Resolve concepts
-        matches = resolver.resolve(candidate_clean, threshold, phrase_first=phrase_first)
+        matches = resolver.resolve(candidate_normalised, threshold, phrase_first=phrase_first)
         index = payload.query.lower().find(candidate.lower())
 
         ## LS - Not needed, as this will default to creating a 'condition' based on the query context
