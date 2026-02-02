@@ -176,8 +176,10 @@ AGE_PATTERNS = [
 DEMOGRAPHC_PATTERNS = [
     (re.compile(r"\bmales\b", re.I), "MALE"),
     (re.compile(r"\bmen\b", re.I), "MALE"),
+    (re.compile(r"\bboys\b", re.I), "MALE"),
     (re.compile(r"\bwomen\b", re.I), "FEMALE"),
     (re.compile(r"\bfemales\b", re.I), "FEMALE"),
+    (re.compile(r"\bgirls\b", re.I), "FEMALE"),
 ]
 
 UNSUPPORTED_PATTERNS = {

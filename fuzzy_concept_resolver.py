@@ -30,6 +30,22 @@ def tokenise(text):
             phrases.add(" ".join(tokens[i:i + n]))
     return unigrams, phrases
 
+def fuzzy_token_overlap(candidate_tokens, concept_tokens, min_score=90):
+    if not candidate_tokens or not concept_tokens:
+        return 0.0
+    matched = 0
+    for candidate_token in candidate_tokens:
+        best = 0
+        for concept_token in concept_tokens:
+            score = fuzz.ratio(candidate_token, concept_token)
+            if score > best:
+                best = score
+                if best >= min_score:
+                    break
+        if best >= min_score:
+            matched += 1
+    return matched / max(len(candidate_tokens), 1)
+
 class FuzzyConceptResolver:
     """
     Fuzzy matcher for resolving natural language text to standardised concepts.
@@ -78,6 +94,8 @@ class FuzzyConceptResolver:
         self.concepts = concepts
         self.log_matches = os.getenv("LOG_RESOLVER_MATCHES", "false").lower() in {"1", "true", "yes", "on"}
         self.log_match_limit = int(os.getenv("LOG_RESOLVER_MATCH_LIMIT", 50))
+        self.fuzzy_token_overlap = os.getenv("FUZZY_TOKEN_OVERLAP", "true").lower() in {"1", "true", "yes", "on"}
+        self.fuzzy_token_min_score = int(os.getenv("FUZZY_TOKEN_MIN_SCORE", 85))
 
         # Pre-tokenise each concept's name first, description second
         for c in self.concepts:
@@ -143,8 +161,15 @@ class FuzzyConceptResolver:
                 overlap = candidate_phrases & concept_phrases
                 token_ratio = len(overlap) / max(len(candidate_phrases), 1)
             else:
-                overlap = candidate_unigrams & concept_tokens
-                token_ratio = len(overlap) / max(len(candidate_unigrams), 1)
+                if self.fuzzy_token_overlap:
+                    token_ratio = fuzzy_token_overlap(
+                        candidate_unigrams,
+                        concept_tokens,
+                        min_score=self.fuzzy_token_min_score,
+                    )
+                else:
+                    overlap = candidate_unigrams & concept_tokens
+                    token_ratio = len(overlap) / max(len(candidate_unigrams), 1)
 
             if self.log_matches and logged < self.log_match_limit:
                 concept_text = concept.get("concept_name") or concept.get("description") or ""
