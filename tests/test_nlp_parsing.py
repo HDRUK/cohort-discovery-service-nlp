@@ -64,3 +64,38 @@ def test_adults_type2_diabetes_last_2_years():
 
     # Warnings
     assert body.get("warnings") == []
+
+def test_fuzzy_token_overlap_handles_simple_misspelling(monkeypatch):
+    monkeypatch.setenv("FUZZY_TOKEN_OVERLAP", "true")
+    monkeypatch.setenv("FUZZY_TOKEN_MIN_SCORE", "90")
+
+    local_concepts = [
+        {
+            "concept_id": 2,
+            "concept_name": "Asthma",
+            "description": "Asthma",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Clinical Finding",
+            "standard_concept": "S",
+        }
+    ]
+
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+
+    response = client.post(
+        "/extract?threshold=70",
+        json={"query": "astma"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "entities" in body
+    assert len(body["entities"]) >= 1
+
+    entity = next(
+        (e for e in body["entities"] if e["attributes"].get("description")),
+        body["entities"][0],
+    )
+    concept = entity["attributes"].get("description")
+    assert concept and "asthma" in concept.lower()
