@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import string
@@ -112,14 +113,9 @@ def split_candidates(text: str) -> List[str]:
     """
     Split text into candidate phrases based on common clinical separators.
     """
-    splitters = (
-        r", | and | with | who have | who has | who received | who have received | who has received |"
-        r" who've | who has been | who have been | who were given | who got | patients who | people who |"
-        r" due to | because of |; | when they | when he | when she | when patients | when people "
-    )
-    candidates = [
-        s.strip() for s in re.split(splitters, text, flags=re.IGNORECASE) if s.strip()
-    ]
+    splitters = RULES["splitters"]
+    pattern = "|".join(splitters)
+    candidates = [s.strip() for s in re.split(pattern, text, flags=re.IGNORECASE) if s.strip()]
     print(f"found candidates {candidates}")
     return candidates
 
@@ -137,28 +133,102 @@ def strip_leading_verbs(text: str) -> str:
     """
     text = text.strip()
     # Only strip when the verb is at the very start to avoid over-splitting.
-    patterns = [
-        r"^(received|got|given|administered)\s+",
-        r"^vaccinated\s+with\s+",
-        r"^vaccination\s+with\s+",
-        r"^(suffered|had|experienced)\s+",
-        r"^diagnosed\s+with\s+",
-        r"^diagnosed\s+",
-        r"^(a|an|the)\s+diagnosis\s+of\s+",
-        r"^(diagnosis|history)\s+of\s+",
-        r"^(a|an|the)\s+",
-    ]
-    for pattern in patterns:
-        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+    for pattern in RULES["leading_verbs"]:
+        text = pattern.sub("", text)
+    return text.strip()
+
+def load_mappings():
+    mappings_path = os.getenv("MAPPINGS_PATH", "mappings.json")
+    try:
+        with open(mappings_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except FileNotFoundError:
+        print(f"[Config] mappings file not found: {mappings_path}")
+        sys.exit(1)
+    except json.JSONDecodeError as exc:
+        print(f"[Config] invalid mappings JSON in {mappings_path}: {exc}")
+        sys.exit(1)
+
+    compiled = {}
+    for entry in data.get("mappings", []):
+        group = entry.get("group", "default")
+        compiled.setdefault(group, [])
+        compiled[group].append(
+            {
+                "pattern": re.compile(entry["pattern"], re.IGNORECASE),
+                "replacement": entry.get("replacement", ""),
+                "warning": entry.get("warning"),
+                "contains": entry.get("contains", []),
+            }
+        )
+    return compiled
+
+
+def load_rules():
+    rules_path = os.getenv("RULES_PATH", "rules.json")
+    try:
+        with open(rules_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except FileNotFoundError:
+        print(f"[Config] rules file not found: {rules_path}")
+        sys.exit(1)
+    except json.JSONDecodeError as exc:
+        print(f"[Config] invalid rules JSON in {rules_path}: {exc}")
+        sys.exit(1)
+
+    compiled = {
+        "splitters": data.get("splitters", []),
+        "leading_verbs": [re.compile(p, re.IGNORECASE) for p in data.get("leading_verbs", [])],
+        "age_patterns": [
+            (re.compile(entry["pattern"], re.IGNORECASE), entry["op"])
+            for entry in data.get("age_patterns", [])
+        ],
+        "age_overrides": [
+            {
+                "pattern": re.compile(entry["pattern"], re.IGNORECASE),
+                "min": entry.get("min"),
+                "max": entry.get("max"),
+                "inclusive": entry.get("inclusive", True),
+            }
+            for entry in data.get("age_overrides", [])
+        ],
+        "unsupported_patterns": {
+            name: re.compile(pattern, re.IGNORECASE)
+            for name, pattern in data.get("unsupported_patterns", {}).items()
+        },
+    }
+    return compiled
+
+
+# Pre-compile mappings and rules and cache
+#
+# This happens only at start-up to avoid lag in operation.
+# If mappings/rules are updated, the service must be restarted.
+#
+MAPPINGS = load_mappings()
+RULES = load_rules()
+
+
+def apply_mappings(text: str, group: str, warnings: Optional[List[str]] = None) -> str:
+    """
+    Apply mapping rules for a group to the text.
+    """
+    for entry in MAPPINGS.get(group, []):
+        if entry["contains"]:
+            haystack = text.lower()
+            if not any(token.lower() in haystack for token in entry["contains"]):
+                continue
+        if entry["pattern"].search(text):
+            text = entry["pattern"].sub(entry["replacement"], text)
+            if warnings is not None and entry.get("warning"):
+                warnings.append(entry["warning"])
     return text.strip()
 
 def apply_demographic_patterns(text: str) -> str:
     """
     Replace demographic wording with canonical tokens for matching.
     """
-    for pattern, replacement in DEMOGRAPHC_PATTERNS:
-        text = pattern.sub(replacement, text)
-    return text.strip()
+    return apply_mappings(text, "demographic")
 
 def extract_age_constraints(text: str, scope: str) -> Tuple[List[Dict[str, Any]], str]:
     """
@@ -167,8 +237,20 @@ def extract_age_constraints(text: str, scope: str) -> Tuple[List[Dict[str, Any]]
     constraints = []
     cleaned = text
 
+    for entry in AGE_OVERRIDES:
+        for m in entry["pattern"].finditer(cleaned):
+            constraints.append(
+                {
+                    "min": entry.get("min"),
+                    "max": entry.get("max"),
+                    "inclusive": entry.get("inclusive", True),
+                    "scope": scope,
+                }
+            )
+        cleaned = entry["pattern"].sub("", cleaned)
+
     for pattern, op in AGE_PATTERNS:
-        for m in pattern.finditer(text):
+        for m in pattern.finditer(cleaned):
             if op == "<":
                 max_age = int(m.group(1))
                 constraints.append({"min": None, "max": max_age, "inclusive": False, "scope": scope})
@@ -230,28 +312,10 @@ def is_negated(text: str) -> bool:
 
 
 NEGATION_TERMS = {"no", "not", "without", "never"}
-AGE_PATTERNS = [
-    (re.compile(r"under\s+(\d+)", re.I), "<"),
-    (re.compile(r"over\s+(\d+)", re.I), ">"),
-    (re.compile(r"(\d+)\+", re.I), ">="),
-    (re.compile(r"aged\s+(\d+)\s*[-\u2010\u2011\u2012\u2013\u2014\u2212]\s*(\d+)", re.I), "range"),
-]
-
-DEMOGRAPHC_PATTERNS = [
-    (re.compile(r"\bmales\b", re.I), "MALE"),
-    (re.compile(r"\bmen\b", re.I), "MALE"),
-    (re.compile(r"\bboys\b", re.I), "MALE"),
-    (re.compile(r"\bwomen\b", re.I), "FEMALE"),
-    (re.compile(r"\bfemales\b", re.I), "FEMALE"),
-    (re.compile(r"\bgirls\b", re.I), "FEMALE"),
-]
-
-UNSUPPORTED_PATTERNS = {
-    "visit": re.compile(r"\b(visit|gp|hospital|admitted)\b", re.I),
-    "sequence": re.compile(r"\b(after|before|later|followed by)\b", re.I),
-    "location": re.compile(r"\b(regions|region|england|scotland|wales)\b", re.I),
-    "measurement": re.compile(r"\b(above|below|mmol|value)\b", re.I),
-}
+AGE_PATTERNS = RULES["age_patterns"]
+AGE_OVERRIDES = RULES["age_overrides"]
+DEMOGRAPHC_PATTERNS = []
+UNSUPPORTED_PATTERNS = RULES["unsupported_patterns"]
 
 
 # ------------------------------------------------------------
@@ -308,6 +372,7 @@ async def extract_entities(
         candidate_age_constraints, candidate_without_age = extract_age_constraints(candidate, "entity")
         candidate_clean = strip_leading_verbs(clean_candidates(candidate_without_age))
         candidate_normalised = apply_demographic_patterns(candidate_clean)
+        candidate_normalised = apply_mappings(candidate_normalised, "bmi", warnings)
         if has_non_demographic_content(candidate_normalised):
             has_event_candidate = True
             break
@@ -317,6 +382,7 @@ async def extract_entities(
         candidate_age_constraints, candidate_without_age = extract_age_constraints(candidate, "entity")
         candidate_clean = strip_leading_verbs(clean_candidates(candidate_without_age))
         candidate_normalised = apply_demographic_patterns(candidate_clean)
+        candidate_normalised = apply_mappings(candidate_normalised, "bmi", warnings)
 
         if re.search(r"\bCHILD\b", candidate_normalised, re.IGNORECASE):
             if not candidate_age_constraints:

@@ -1,0 +1,63 @@
+{
+    "splitters": [
+        ",\\s+",
+        "\\sand\\s",
+        "\\swith\\s",
+        "\\swho have\\s",
+        "\\swho has\\s",
+        "\\swho received\\s",
+        "\\swho have received\\s",
+        "\\swho has received\\s",
+        "\\swho've\\s",
+        "\\swho has been\\s",
+        "\\swho have been\\s",
+        "\\swho were given\\s",
+        "\\swho got\\s",
+        "\\spatients who\\s",
+        "\\speople who\\s",
+        "\\sdue to\\s",
+        "\\sbecause of\\s",
+        ";\\s*",
+        "\\swhen they\\s",
+        "\\swhen he\\s",
+        "\\swhen she\\s",
+        "\\swhen patients\\s",
+        "\\swhen people\\s"
+    ],
+    "leading_verbs": [
+        "^(received|got|given|administered)\\s+",
+        "^vaccinated\\s+with\\s+",
+        "^vaccination\\s+with\\s+",
+        "^(suffered|had|experienced)\\s+",
+        "^diagnosed\\s+with\\s+",
+        "^diagnosed\\s+",
+        "^(a|an|the)\\s+diagnosis\\s+of\\s+",
+        "^(diagnosis|history)\\s+of\\s+",
+        "^(a|an|the)\\s+"
+    ],
+    "age_patterns": [
+        {
+            "pattern": "under\\s+(\\d+)",
+            "op": "<"
+        },
+        {
+            "pattern": "over\\s+(\\d+)",
+            "op": ">"
+        },
+        {
+            "pattern": "(\\d+)\\+",
+            "op": ">="
+        },
+        {
+            "pattern": "aged\\s+(\\d+)\\s*[-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2212]\\s*(\\d+)",
+            "op": "range"
+        }
+    ],
+    "age_overrides": [],
+    "unsupported_patterns": {
+        "visit": "\\b(visit|gp|hospital|admitted)\\b",
+        "sequence": "\\b(after|before|later|followed by)\\b",
+        "location": "\\b(regions|region|england|scotland|wales)\\b",
+        "measurement": "\\b(above|below|mmol|value)\\b"
+    }
+}
