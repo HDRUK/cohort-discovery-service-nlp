@@ -4,7 +4,7 @@ import re
 import string
 import time
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 from fastapi import FastAPI, Query, Request, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional, Tuple
@@ -192,6 +192,10 @@ def load_rules():
             }
             for entry in data.get("age_overrides", [])
         ],
+        "time_patterns": [
+            (re.compile(entry["pattern"], re.IGNORECASE), entry["op"])
+            for entry in data.get("time_patterns", [])
+        ],
         "demographic_age_defaults": data.get("demographic_age_defaults", {}),
         "unsupported_patterns": {
             name: re.compile(pattern, re.IGNORECASE)
@@ -273,6 +277,36 @@ def extract_age_constraints(text: str, scope: str) -> Tuple[List[Dict[str, Any]]
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return constraints, cleaned
 
+
+def extract_time_constraints(text: str, scope: str) -> Tuple[List[Dict[str, Any]], str]:
+    """
+    Extract normalized time constraints and strip them from the text.
+    """
+    constraints = []
+    cleaned = text
+
+    for pattern, op in TIME_PATTERNS:
+        for m in pattern.finditer(cleaned):
+            if op == "last":
+                value = int(m.group(1))
+                unit = m.group(2).lower()
+                to_date = datetime.utcnow()
+                if unit.startswith("year"):
+                    from_date = to_date - timedelta(days=365 * value)
+                else:
+                    from_date = to_date - timedelta(days=30 * value)
+                constraints.append(
+                    {
+                        "from": from_date.isoformat(),
+                        "to": to_date.isoformat(),
+                        "scope": scope,
+                    }
+                )
+        cleaned = pattern.sub("", cleaned)
+
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return constraints, cleaned
+
 def merge_age_constraints(primary: List[Dict[str, Any]], secondary: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Merge age constraints, avoiding duplicates.
@@ -281,6 +315,21 @@ def merge_age_constraints(primary: List[Dict[str, Any]], secondary: List[Dict[st
     seen = set()
     for entry in primary + secondary:
         key = (entry.get("min"), entry.get("max"), entry.get("inclusive"), entry.get("scope"))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(entry)
+    return merged
+
+
+def merge_time_constraints(primary: List[Dict[str, Any]], secondary: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Merge time constraints, avoiding duplicates.
+    """
+    merged = []
+    seen = set()
+    for entry in primary + secondary:
+        key = (entry.get("from"), entry.get("to"), entry.get("scope"))
         if key in seen:
             continue
         seen.add(key)
@@ -324,6 +373,7 @@ def is_negated(text: str) -> bool:
 NEGATION_TERMS = {"no", "not", "without", "never"}
 AGE_PATTERNS = RULES["age_patterns"]
 AGE_OVERRIDES = RULES["age_overrides"]
+TIME_PATTERNS = RULES["time_patterns"]
 DEMOGRAPHIC_AGE_DEFAULTS = RULES["demographic_age_defaults"]
 DEMOGRAPHC_PATTERNS = []
 UNSUPPORTED_PATTERNS = RULES["unsupported_patterns"]
@@ -343,6 +393,7 @@ class Entity(BaseModel):
     end: int
     attributes: Dict[str, Any]
     age_constraints: List[Dict[str, Any]] = []
+    time_constraints: List[Dict[str, Any]] = []
     negated: bool = False
 
 
@@ -373,15 +424,19 @@ async def extract_entities(
     entities = []
     seen = set()
     entity_age_constraints = []
+    entity_time_constraints = []
     warnings = []
     global_age_constraints, _ = extract_age_constraints(payload.query, "query")
+    global_time_constraints, _ = extract_time_constraints(payload.query, "query")
     entity_age_constraints_all: List[Dict[str, Any]] = []
+    entity_time_constraints_all: List[Dict[str, Any]] = []
     has_event_candidate = False
 
     # Pre-pass: detect whether any candidate includes non-demographic content
     for candidate in candidates:
         candidate_age_constraints, candidate_without_age = extract_age_constraints(candidate, "entity")
-        candidate_clean = strip_leading_verbs(clean_candidates(candidate_without_age))
+        candidate_time_constraints, candidate_without_time = extract_time_constraints(candidate_without_age, "entity")
+        candidate_clean = strip_leading_verbs(clean_candidates(candidate_without_time))
         candidate_normalised = apply_demographic_patterns(candidate_clean)
         candidate_normalised = apply_mappings(candidate_normalised, "bmi", warnings)
         if has_non_demographic_content(candidate_normalised):
@@ -391,7 +446,8 @@ async def extract_entities(
     # Pre-pass: collect any age constraints found in candidate phrases
     for candidate in candidates:
         candidate_age_constraints, candidate_without_age = extract_age_constraints(candidate, "entity")
-        candidate_clean = strip_leading_verbs(clean_candidates(candidate_without_age))
+        candidate_time_constraints, candidate_without_time = extract_time_constraints(candidate_without_age, "entity")
+        candidate_clean = strip_leading_verbs(clean_candidates(candidate_without_time))
         candidate_normalised = apply_demographic_patterns(candidate_clean)
         candidate_normalised = apply_mappings(candidate_normalised, "bmi", warnings)
 
@@ -417,9 +473,18 @@ async def extract_entities(
                     constraint["scope"] = "query"
             entity_age_constraints_all = merge_age_constraints(entity_age_constraints_all, candidate_age_constraints)
 
+        if candidate_time_constraints:
+            if not has_event_candidate:
+                for constraint in candidate_time_constraints:
+                    constraint["scope"] = "query"
+            entity_time_constraints_all = merge_time_constraints(
+                entity_time_constraints_all, candidate_time_constraints
+            )
+
     for candidate in candidates:
         candidate_age_constraints, candidate_without_age = extract_age_constraints(candidate, "entity")
-        candidate_clean = strip_leading_verbs(clean_candidates(candidate_without_age))
+        candidate_time_constraints, candidate_without_time = extract_time_constraints(candidate_without_age, "entity")
+        candidate_clean = strip_leading_verbs(clean_candidates(candidate_without_time))
         candidate_normalised = apply_demographic_patterns(candidate_clean)
 
         # Negation
@@ -452,6 +517,11 @@ async def extract_entities(
             entity_age_constraints = entity_age_constraints_all
         else:
             entity_age_constraints = merge_age_constraints(global_age_constraints, candidate_age_constraints)
+
+        if entity_time_constraints_all:
+            entity_time_constraints = entity_time_constraints_all
+        else:
+            entity_time_constraints = merge_time_constraints(global_time_constraints, candidate_time_constraints)
 
         # Unsupported concepts
         unsupported = [
@@ -501,6 +571,7 @@ async def extract_entities(
                 "end": end_idx,
                 "negated": negated,
                 "age_constraints": entity_age_constraints if entity_age_constraints is not None else [],
+                "time_constraints": entity_time_constraints if entity_time_constraints is not None else [],
                 "attributes": match,
             })
 
