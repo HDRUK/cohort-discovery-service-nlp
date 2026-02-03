@@ -144,6 +144,9 @@ def strip_leading_verbs(text: str) -> str:
         r"^(suffered|had|experienced)\s+",
         r"^diagnosed\s+with\s+",
         r"^diagnosed\s+",
+        r"^(a|an|the)\s+diagnosis\s+of\s+",
+        r"^(diagnosis|history)\s+of\s+",
+        r"^(a|an|the)\s+",
     ]
     for pattern in patterns:
         text = re.sub(pattern, "", text, flags=re.IGNORECASE)
@@ -200,6 +203,20 @@ def merge_age_constraints(primary: List[Dict[str, Any]], secondary: List[Dict[st
         seen.add(key)
         merged.append(entry)
     return merged
+
+def has_non_demographic_content(text: str) -> bool:
+    """
+    Returns True if text contains content beyond demographics/connector words.
+    """
+    text = re.sub(r"\b(MALE|FEMALE|CHILD)\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"\b(who|were|are|is|aged|age|under|over|when|they|he|she|people|patients|with|the|a|an)\b",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\s+", " ", text).strip()
+    return bool(text)
 
 def is_negated(text: str) -> bool:
     """
@@ -284,16 +301,31 @@ async def extract_entities(
     warnings = []
     global_age_constraints, _ = extract_age_constraints(payload.query, "query")
     entity_age_constraints_all: List[Dict[str, Any]] = []
+    has_event_candidate = False
+
+    # Pre-pass: detect whether any candidate includes non-demographic content
+    for candidate in candidates:
+        candidate_age_constraints, candidate_without_age = extract_age_constraints(candidate, "entity")
+        candidate_clean = strip_leading_verbs(clean_candidates(candidate_without_age))
+        candidate_normalised = apply_demographic_patterns(candidate_clean)
+        if has_non_demographic_content(candidate_normalised):
+            has_event_candidate = True
+            break
 
     # Pre-pass: collect any age constraints found in candidate phrases
     for candidate in candidates:
         candidate_age_constraints, candidate_without_age = extract_age_constraints(candidate, "entity")
         candidate_clean = strip_leading_verbs(clean_candidates(candidate_without_age))
         candidate_normalised = apply_demographic_patterns(candidate_clean)
+
         if re.search(r"\bCHILD\b", candidate_normalised, re.IGNORECASE):
             if not candidate_age_constraints:
-                candidate_age_constraints.append({"min": None, "max": 17, "inclusive": True, "scope": "entity"})
+                candidate_age_constraints.append({"min": None, "max": 18, "inclusive": False, "scope": "entity"})
+
         if candidate_age_constraints:
+            if not has_event_candidate:
+                for constraint in candidate_age_constraints:
+                    constraint["scope"] = "query"
             entity_age_constraints_all = merge_age_constraints(entity_age_constraints_all, candidate_age_constraints)
 
     for candidate in candidates:
