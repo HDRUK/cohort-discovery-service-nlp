@@ -57,8 +57,10 @@ def test_adults_type2_diabetes_last_2_years():
     # Age
     assert any(
         e.get("age_constraints")
-        and e["age_constraints"][0]["operator"] == ">"
-        and e["age_constraints"][0]["values"] == ["24"]
+        and e["age_constraints"][0]["min"] == 24
+        and e["age_constraints"][0]["max"] is None
+        and e["age_constraints"][0]["inclusive"] is False
+        and e["age_constraints"][0]["scope"] in {"query", "entity"}
         for e in body["entities"]
     )
 
@@ -69,6 +71,7 @@ def test_fuzzy_token_overlap_handles_simple_misspelling(monkeypatch):
     monkeypatch.setenv("FUZZY_TOKEN_OVERLAP", "true")
     monkeypatch.setenv("FUZZY_TOKEN_MIN_SCORE", "90")
 
+    previous_store = app.state.resolver_store
     local_concepts = [
         {
             "concept_id": 2,
@@ -83,9 +86,74 @@ def test_fuzzy_token_overlap_handles_simple_misspelling(monkeypatch):
 
     app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
 
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "astma"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "entities" in body
+        assert len(body["entities"]) >= 1
+
+        entity = next(
+            (e for e in body["entities"] if e["attributes"].get("description")),
+            body["entities"][0],
+        )
+        concept = entity["attributes"].get("description")
+        assert concept and "asthma" in concept.lower()
+    finally:
+        app.state.resolver_store = previous_store
+
+def test_women_over_50_with_diabetes_age_constraint():
     response = client.post(
         "/extract?threshold=70",
-        json={"query": "astma"},
+        json={"query": "women over 50 diagnosed with diabetes"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+
+    assert "entities" in body
+    assert len(body["entities"]) >= 1
+
+    assert any(
+        e.get("age_constraints")
+        and e["age_constraints"][0]["min"] == 50
+        and e["age_constraints"][0]["max"] is None
+        and e["age_constraints"][0]["inclusive"] is False
+        and e["age_constraints"][0]["scope"] in {"query", "entity"}
+        for e in body["entities"]
+    )
+
+def test_women_under_60_hip_fracture_entity_age_constraint():
+    local_concepts = [
+        {
+            "concept_id": 10,
+            "concept_name": "Hip fracture",
+            "description": "Hip fracture",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+        {
+            "concept_id": 11,
+            "concept_name": "Female",
+            "description": "Female",
+            "domain_id": "Gender",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Gender",
+            "standard_concept": "S",
+        },
+    ]
+
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+
+    response = client.post(
+        "/extract?threshold=70",
+        json={"query": "Women who were under 60 when they suffered a hip fracture"},
     )
 
     assert response.status_code == 200
@@ -93,9 +161,20 @@ def test_fuzzy_token_overlap_handles_simple_misspelling(monkeypatch):
     assert "entities" in body
     assert len(body["entities"]) >= 1
 
-    entity = next(
-        (e for e in body["entities"] if e["attributes"].get("description")),
-        body["entities"][0],
+    assert any(
+        e.get("attributes", {}).get("description", "").lower() == "hip fracture"
+        for e in body["entities"]
     )
-    concept = entity["attributes"].get("description")
-    assert concept and "asthma" in concept.lower()
+    assert any(
+        e.get("attributes", {}).get("description", "").lower() == "female"
+        for e in body["entities"]
+    )
+
+    assert all(
+        e.get("age_constraints")
+        and e["age_constraints"][0]["min"] is None
+        and e["age_constraints"][0]["max"] == 60
+        and e["age_constraints"][0]["inclusive"] is False
+        and e["age_constraints"][0]["scope"] == "entity"
+        for e in body["entities"]
+    )
