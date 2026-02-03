@@ -192,6 +192,7 @@ def load_rules():
             }
             for entry in data.get("age_overrides", [])
         ],
+        "demographic_age_defaults": data.get("demographic_age_defaults", {}),
         "unsupported_patterns": {
             name: re.compile(pattern, re.IGNORECASE)
             for name, pattern in data.get("unsupported_patterns", {}).items()
@@ -291,6 +292,8 @@ def has_non_demographic_content(text: str) -> bool:
     Returns True if text contains content beyond demographics/connector words.
     """
     text = re.sub(r"\b(MALE|FEMALE|CHILD)\b", "", text, flags=re.IGNORECASE)
+    for term in DEMOGRAPHIC_AGE_DEFAULTS.keys():
+        text = re.sub(rf"\b{re.escape(term)}s?\b", "", text, flags=re.IGNORECASE)
     text = re.sub(
         r"\b(who|were|are|is|aged|age|under|over|when|they|he|she|people|patients|with|the|a|an)\b",
         "",
@@ -299,6 +302,13 @@ def has_non_demographic_content(text: str) -> bool:
     )
     text = re.sub(r"\s+", " ", text).strip()
     return bool(text)
+
+
+def find_demographic_age_default(text: str) -> Optional[Dict[str, Any]]:
+    for term, defaults in DEMOGRAPHIC_AGE_DEFAULTS.items():
+        if re.search(rf"\b{re.escape(term)}s?\b", text, re.IGNORECASE):
+            return defaults
+    return None
 
 def is_negated(text: str) -> bool:
     """
@@ -314,6 +324,7 @@ def is_negated(text: str) -> bool:
 NEGATION_TERMS = {"no", "not", "without", "never"}
 AGE_PATTERNS = RULES["age_patterns"]
 AGE_OVERRIDES = RULES["age_overrides"]
+DEMOGRAPHIC_AGE_DEFAULTS = RULES["demographic_age_defaults"]
 DEMOGRAPHC_PATTERNS = []
 UNSUPPORTED_PATTERNS = RULES["unsupported_patterns"]
 
@@ -388,6 +399,18 @@ async def extract_entities(
             if not candidate_age_constraints:
                 candidate_age_constraints.append({"min": None, "max": 18, "inclusive": False, "scope": "entity"})
 
+        if not candidate_age_constraints:
+            defaults = find_demographic_age_default(candidate)
+            if defaults:
+                candidate_age_constraints.append(
+                    {
+                        "min": defaults.get("min"),
+                        "max": defaults.get("max"),
+                        "inclusive": defaults.get("inclusive", True),
+                        "scope": "entity",
+                    }
+                )
+
         if candidate_age_constraints:
             if not has_event_candidate:
                 for constraint in candidate_age_constraints:
@@ -412,6 +435,18 @@ async def extract_entities(
                 candidate_age_constraints.append({"min": None, "max": 18, "inclusive": False, "scope": "entity"})
             candidate_normalised = re.sub(r"\bCHILD\b", "", candidate_normalised, flags=re.IGNORECASE)
             candidate_normalised = re.sub(r"\s+", " ", candidate_normalised).strip()
+
+        if not candidate_age_constraints:
+            defaults = find_demographic_age_default(candidate)
+            if defaults:
+                candidate_age_constraints.append(
+                    {
+                        "min": defaults.get("min"),
+                        "max": defaults.get("max"),
+                        "inclusive": defaults.get("inclusive", True),
+                        "scope": "entity",
+                    }
+                )
 
         if entity_age_constraints_all:
             entity_age_constraints = entity_age_constraints_all

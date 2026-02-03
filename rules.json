@@ -54,6 +54,13 @@
         }
     ],
     "age_overrides": [],
+    "demographic_age_defaults": {
+        "adult": { "min": 18, "max": null, "inclusive": true },
+        "child": { "min": 0, "max": 17, "inclusive": true },
+        "children": { "min": 0, "max": 17, "inclusive": true },
+        "senior": { "min": 65, "max": null, "inclusive": true },
+        "elderly": { "min": 65, "max": null, "inclusive": true }
+    },
     "unsupported_patterns": {
         "visit": "\\b(visit|gp|hospital|admitted)\\b",
         "sequence": "\\b(after|before|later|followed by)\\b",
