@@ -6,7 +6,7 @@ import sys
 from datetime import timedelta
 from fastapi import FastAPI, Query, Request, Depends
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from dotenv import load_dotenv
 import mysql.connector
 
@@ -115,7 +115,7 @@ def split_candidates(text: str) -> List[str]:
     splitters = (
         r", | and | with | who have | who has | who received | who have received | who has received |"
         r" who've | who has been | who have been | who were given | who got | patients who | people who |"
-        r" due to | because of |; "
+        r" due to | because of |; | when they | when he | when she | when patients | when people "
     )
     candidates = [
         s.strip() for s in re.split(splitters, text, flags=re.IGNORECASE) if s.strip()
@@ -141,6 +141,12 @@ def strip_leading_verbs(text: str) -> str:
         r"^(received|got|given|administered)\s+",
         r"^vaccinated\s+with\s+",
         r"^vaccination\s+with\s+",
+        r"^(suffered|had|experienced)\s+",
+        r"^diagnosed\s+with\s+",
+        r"^diagnosed\s+",
+        r"^(a|an|the)\s+diagnosis\s+of\s+",
+        r"^(diagnosis|history)\s+of\s+",
+        r"^(a|an|the)\s+",
     ]
     for pattern in patterns:
         text = re.sub(pattern, "", text, flags=re.IGNORECASE)
@@ -153,6 +159,64 @@ def apply_demographic_patterns(text: str) -> str:
     for pattern, replacement in DEMOGRAPHC_PATTERNS:
         text = pattern.sub(replacement, text)
     return text.strip()
+
+def extract_age_constraints(text: str, scope: str) -> Tuple[List[Dict[str, Any]], str]:
+    """
+    Extract normalised age constraints and strip them from the text.
+    """
+    constraints = []
+    cleaned = text
+
+    for pattern, op in AGE_PATTERNS:
+        for m in pattern.finditer(text):
+            if op == "<":
+                max_age = int(m.group(1))
+                constraints.append({"min": None, "max": max_age, "inclusive": False, "scope": scope})
+            elif op == ">":
+                min_age = int(m.group(1))
+                constraints.append({"min": min_age, "max": None, "inclusive": False, "scope": scope})
+            elif op == ">=":
+                min_age = int(m.group(1))
+                constraints.append({"min": min_age, "max": None, "inclusive": True, "scope": scope})
+            elif op == "range":
+                min_age = int(m.group(1))
+                max_age = int(m.group(2))
+                if min_age > max_age:
+                    min_age, max_age = max_age, min_age
+                constraints.append({"min": min_age, "max": max_age, "inclusive": True, "scope": scope})
+
+        cleaned = pattern.sub("", cleaned)
+
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return constraints, cleaned
+
+def merge_age_constraints(primary: List[Dict[str, Any]], secondary: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Merge age constraints, avoiding duplicates.
+    """
+    merged = []
+    seen = set()
+    for entry in primary + secondary:
+        key = (entry.get("min"), entry.get("max"), entry.get("inclusive"), entry.get("scope"))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(entry)
+    return merged
+
+def has_non_demographic_content(text: str) -> bool:
+    """
+    Returns True if text contains content beyond demographics/connector words.
+    """
+    text = re.sub(r"\b(MALE|FEMALE|CHILD)\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"\b(who|were|are|is|aged|age|under|over|when|they|he|she|people|patients|with|the|a|an)\b",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\s+", " ", text).strip()
+    return bool(text)
 
 def is_negated(text: str) -> bool:
     """
@@ -170,7 +234,7 @@ AGE_PATTERNS = [
     (re.compile(r"under\s+(\d+)", re.I), "<"),
     (re.compile(r"over\s+(\d+)", re.I), ">"),
     (re.compile(r"(\d+)\+", re.I), ">="),
-    (re.compile(r"aged\s+(\d+)[--](\d+)", re.I), "range"),
+    (re.compile(r"aged\s+(\d+)\s*[-\u2010\u2011\u2012\u2013\u2014\u2212]\s*(\d+)", re.I), "range"),
 ]
 
 DEMOGRAPHC_PATTERNS = [
@@ -235,9 +299,38 @@ async def extract_entities(
     seen = set()
     entity_age_constraints = []
     warnings = []
+    global_age_constraints, _ = extract_age_constraints(payload.query, "query")
+    entity_age_constraints_all: List[Dict[str, Any]] = []
+    has_event_candidate = False
+
+    # Pre-pass: detect whether any candidate includes non-demographic content
+    for candidate in candidates:
+        candidate_age_constraints, candidate_without_age = extract_age_constraints(candidate, "entity")
+        candidate_clean = strip_leading_verbs(clean_candidates(candidate_without_age))
+        candidate_normalised = apply_demographic_patterns(candidate_clean)
+        if has_non_demographic_content(candidate_normalised):
+            has_event_candidate = True
+            break
+
+    # Pre-pass: collect any age constraints found in candidate phrases
+    for candidate in candidates:
+        candidate_age_constraints, candidate_without_age = extract_age_constraints(candidate, "entity")
+        candidate_clean = strip_leading_verbs(clean_candidates(candidate_without_age))
+        candidate_normalised = apply_demographic_patterns(candidate_clean)
+
+        if re.search(r"\bCHILD\b", candidate_normalised, re.IGNORECASE):
+            if not candidate_age_constraints:
+                candidate_age_constraints.append({"min": None, "max": 18, "inclusive": False, "scope": "entity"})
+
+        if candidate_age_constraints:
+            if not has_event_candidate:
+                for constraint in candidate_age_constraints:
+                    constraint["scope"] = "query"
+            entity_age_constraints_all = merge_age_constraints(entity_age_constraints_all, candidate_age_constraints)
 
     for candidate in candidates:
-        candidate_clean = strip_leading_verbs(clean_candidates(candidate))
+        candidate_age_constraints, candidate_without_age = extract_age_constraints(candidate, "entity")
+        candidate_clean = strip_leading_verbs(clean_candidates(candidate_without_age))
         candidate_normalised = apply_demographic_patterns(candidate_clean)
 
         # Negation
@@ -248,13 +341,16 @@ async def extract_entities(
         )
 
         # Age constraints
-        age_constraints = []
-        for pattern, op in AGE_PATTERNS:
-            m = pattern.search(candidate)
-            if m:
-                age_constraints.append({"operator": op, "values": list(m.groups())})
+        if re.search(r"\bCHILD\b", candidate_normalised, re.IGNORECASE):
+            if not candidate_age_constraints:
+                candidate_age_constraints.append({"min": None, "max": 18, "inclusive": False, "scope": "entity"})
+            candidate_normalised = re.sub(r"\bCHILD\b", "", candidate_normalised, flags=re.IGNORECASE)
+            candidate_normalised = re.sub(r"\s+", " ", candidate_normalised).strip()
 
-        entity_age_constraints = age_constraints
+        if entity_age_constraints_all:
+            entity_age_constraints = entity_age_constraints_all
+        else:
+            entity_age_constraints = merge_age_constraints(global_age_constraints, candidate_age_constraints)
 
         # Unsupported concepts
         unsupported = [
@@ -307,10 +403,13 @@ async def extract_entities(
                 "attributes": match,
             })
 
-    return {
+    response = {
         "entities": entities,
         "warnings": warnings,
     }
+    print(f"Response: {response}")
+
+    return response
 
 @app.get("/")
 def root():
