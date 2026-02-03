@@ -1,5 +1,6 @@
 import json
 
+import app as app_module
 from app import (
     AGE_OVERRIDES,
     AGE_PATTERNS,
@@ -49,7 +50,6 @@ def test_rules_age_overrides_from_config(tmp_path, monkeypatch):
     }
     rules_path.write_text(json.dumps(base_rules), encoding="utf-8")
 
-    import app as app_module
     previous_rules = app_module.RULES
     previous_age_patterns = app_module.AGE_PATTERNS
     previous_age_overrides = app_module.AGE_OVERRIDES
