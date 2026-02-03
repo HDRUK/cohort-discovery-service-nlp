@@ -296,3 +296,129 @@ def test_people_with_chronic_kidney_disease_stage_3_5():
         )
     finally:
         app.state.resolver_store = previous_store
+
+
+def test_adults_with_diabetes_diagnosed_last_two_years_time_constraint():
+    local_concepts = [
+        {
+            "concept_id": 30,
+            "concept_name": "Type 2 diabetes mellitus",
+            "description": "Type 2 diabetes mellitus",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "Adults with type 2 diabetes diagnosed in the last 2 years"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "entities" in body
+        assert len(body["entities"]) >= 1
+
+        assert any(
+            e.get("attributes", {}).get("description", "").lower() == "type 2 diabetes mellitus"
+            for e in body["entities"]
+        )
+
+        assert any(
+            e.get("time_constraints")
+            and e["time_constraints"][0]["from"]
+            and e["time_constraints"][0]["to"]
+            and e["time_constraints"][0]["scope"] in {"query", "entity"}
+            for e in body["entities"]
+        )
+    finally:
+        app.state.resolver_store = previous_store
+
+
+def test_children_with_asthma_default_age_constraint():
+    local_concepts = [
+        {
+            "concept_id": 31,
+            "concept_name": "Asthma",
+            "description": "Asthma",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "Children with asthma"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "entities" in body
+        assert len(body["entities"]) >= 1
+
+        assert any(
+            e.get("attributes", {}).get("description", "").lower() == "asthma"
+            for e in body["entities"]
+        )
+
+        assert any(
+            e.get("age_constraints")
+            and e["age_constraints"][0]["min"] == 0
+            and e["age_constraints"][0]["max"] == 17
+            and e["age_constraints"][0]["inclusive"] is True
+            for e in body["entities"]
+        )
+    finally:
+        app.state.resolver_store = previous_store
+
+
+def test_elderly_with_heart_failure_default_age_constraint():
+    local_concepts = [
+        {
+            "concept_id": 32,
+            "concept_name": "Heart failure",
+            "description": "Heart failure",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "Elderly with heart failure"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "entities" in body
+        assert len(body["entities"]) >= 1
+
+        assert any(
+            e.get("attributes", {}).get("description", "").lower() == "heart failure"
+            for e in body["entities"]
+        )
+
+        assert any(
+            e.get("age_constraints")
+            and e["age_constraints"][0]["min"] == 65
+            and e["age_constraints"][0]["max"] is None
+            and e["age_constraints"][0]["inclusive"] is True
+            for e in body["entities"]
+        )
+    finally:
+        app.state.resolver_store = previous_store
