@@ -234,7 +234,7 @@ AGE_PATTERNS = [
     (re.compile(r"under\s+(\d+)", re.I), "<"),
     (re.compile(r"over\s+(\d+)", re.I), ">"),
     (re.compile(r"(\d+)\+", re.I), ">="),
-    (re.compile(r"aged\s+(\d+)[--](\d+)", re.I), "range"),
+    (re.compile(r"aged\s+(\d+)\s*[-\u2010\u2011\u2012\u2013\u2014\u2212]\s*(\d+)", re.I), "range"),
 ]
 
 DEMOGRAPHC_PATTERNS = [

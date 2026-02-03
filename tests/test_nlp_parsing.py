@@ -178,3 +178,121 @@ def test_women_under_60_hip_fracture_entity_age_constraint():
         and e["age_constraints"][0]["scope"] == "entity"
         for e in body["entities"]
     )
+
+def test_adults_aged_18_30_with_diagnosis_of_asthma():
+    local_concepts = [
+        {
+            "concept_id": 20,
+            "concept_name": "Asthma",
+            "description": "Asthma",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "Adults aged 18–30 with a diagnosis of asthma"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "entities" in body
+        assert len(body["entities"]) >= 1
+
+        assert any(
+            e.get("attributes", {}).get("description", "").lower() == "asthma"
+            for e in body["entities"]
+        )
+
+        assert any(
+            e.get("age_constraints")
+            and e["age_constraints"][0]["min"] == 18
+            and e["age_constraints"][0]["max"] == 30
+            and e["age_constraints"][0]["inclusive"] is True
+            and e["age_constraints"][0]["scope"] == "entity"
+            for e in body["entities"]
+        )
+    finally:
+        app.state.resolver_store = previous_store
+
+def test_people_aged_65_plus_with_diagnosed_hypertension():
+    local_concepts = [
+        {
+            "concept_id": 21,
+            "concept_name": "Hypertension",
+            "description": "Hypertension",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "People aged 65+ with diagnosed hypertension"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "entities" in body
+        assert len(body["entities"]) >= 1
+
+        assert any(
+            e.get("attributes", {}).get("description", "").lower() == "hypertension"
+            for e in body["entities"]
+        )
+
+        assert any(
+            e.get("age_constraints")
+            and e["age_constraints"][0]["min"] == 65
+            and e["age_constraints"][0]["max"] is None
+            and e["age_constraints"][0]["inclusive"] is True
+            and e["age_constraints"][0]["scope"] == "entity"
+            for e in body["entities"]
+        )
+    finally:
+        app.state.resolver_store = previous_store
+
+def test_people_with_chronic_kidney_disease_stage_3_5():
+    local_concepts = [
+        {
+            "concept_id": 22,
+            "concept_name": "Chronic kidney disease stage 3-5",
+            "description": "Chronic kidney disease stage 3-5",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "People with chronic kidney disease stage 3–5"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "entities" in body
+        assert len(body["entities"]) >= 1
+
+        assert any(
+            e.get("attributes", {}).get("description", "").lower()
+            == "chronic kidney disease stage 3-5"
+            for e in body["entities"]
+        )
+    finally:
+        app.state.resolver_store = previous_store
