@@ -46,12 +46,6 @@ class QueryParser:
             candidate_normalised = self.engine.apply_demographic_patterns(candidate_clean)
             candidate_normalised = self.engine.apply_mappings(candidate_normalised, "bmi", warnings)
 
-            if re.search(r"\bCHILD\b", candidate_normalised, re.IGNORECASE):
-                if not candidate_age_constraints:
-                    candidate_age_constraints.append(
-                        {"min": None, "max": 18, "inclusive": False, "scope": "entity"}
-                    )
-
             if not candidate_age_constraints:
                 defaults = self.engine.find_demographic_age_default(candidate)
                 if defaults:
@@ -98,14 +92,6 @@ class QueryParser:
             )
 
             # Age constraints
-            if re.search(r"\bCHILD\b", candidate_normalised, re.IGNORECASE):
-                if not candidate_age_constraints:
-                    candidate_age_constraints.append(
-                        {"min": None, "max": 18, "inclusive": False, "scope": "entity"}
-                    )
-                candidate_normalised = re.sub(r"\bCHILD\b", "", candidate_normalised, flags=re.IGNORECASE)
-                candidate_normalised = re.sub(r"\s+", " ", candidate_normalised).strip()
-
             if not candidate_age_constraints:
                 defaults = self.engine.find_demographic_age_default(candidate)
                 if defaults:
