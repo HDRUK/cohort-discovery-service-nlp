@@ -340,6 +340,42 @@ def test_adults_with_diabetes_diagnosed_last_two_years_time_constraint():
         app.state.resolver_store = previous_store
 
 
+def test_adults_with_diabetes_does_not_create_demographic_entity():
+    local_concepts = [
+        {
+            "concept_id": 30,
+            "concept_name": "Type 2 diabetes mellitus",
+            "description": "Type 2 diabetes mellitus",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "Adults with type 2 diabetes diagnosed in the last 2 years"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "entities" in body
+        assert len(body["entities"]) >= 1
+
+        assert any(
+            e.get("attributes", {}).get("description", "").lower() == "type 2 diabetes mellitus"
+            for e in body["entities"]
+        )
+
+        assert all(e.get("text", "").lower() != "adults" for e in body["entities"])
+    finally:
+        app.state.resolver_store = previous_store
+
+
 def test_children_with_asthma_default_age_constraint():
     local_concepts = [
         {

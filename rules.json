@@ -66,6 +66,9 @@
         "senior": { "min": 65, "max": null, "inclusive": true },
         "elderly": { "min": 65, "max": null, "inclusive": true }
     },
+    "demographic_concept_patterns": [
+        "\\b(MALE|FEMALE)\\b"
+    ],
     "unsupported_patterns": {
         "visit": "\\b(visit|gp|hospital|admitted)\\b",
         "sequence": "\\b(after|before|later|followed by)\\b",
