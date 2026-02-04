@@ -153,7 +153,11 @@ async def extract_entities(
     Extract clinical concepts from query using fuzzy matching.
     """
     resolver = await store.get_resolver()
-    return PARSER.extract(payload.query, threshold, phrase_first, resolver)
+    ret_value = PARSER.extract(payload.query, threshold, phrase_first, resolver)
+
+    print(f"[Request] query='{payload.query}' => entities={ret_value}")
+    
+    return ret_value
 
 
 @app.get("/")

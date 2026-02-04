@@ -418,6 +418,62 @@ def test_children_with_asthma_default_age_constraint():
         app.state.resolver_store = previous_store
 
 
+def test_cancer_and_diabetes_with_age_constraint():
+    local_concepts = [
+        {
+            "concept_id": 36684857,
+            "concept_name": "Cancer",
+            "description": "Cancer",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+        {
+            "concept_id": 201826,
+            "concept_name": "Type 2 diabetes mellitus",
+            "description": "Type 2 diabetes mellitus",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "patients who have been diagnosed with cancer and have diabetes aged over 40"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "entities" in body
+        assert len(body["entities"]) >= 1
+
+        assert any(
+            e.get("attributes", {}).get("description", "").lower()
+            == "cancer"
+            for e in body["entities"]
+        )
+        assert any(
+            e.get("attributes", {}).get("description", "").lower() == "type 2 diabetes mellitus"
+            for e in body["entities"]
+        )
+
+        assert any(
+            e.get("age_constraints")
+            and e["age_constraints"][0]["min"] == 40
+            and e["age_constraints"][0]["max"] is None
+            and e["age_constraints"][0]["inclusive"] is False
+            for e in body["entities"]
+        )
+    finally:
+        app.state.resolver_store = previous_store
+
+
 def test_elderly_with_heart_failure_default_age_constraint():
     local_concepts = [
         {

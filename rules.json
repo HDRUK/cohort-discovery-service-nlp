@@ -35,9 +35,27 @@
         "^(diagnosed|diagnosis)\\s+in\\s+",
         "^(a|an|the)\\s+diagnosis\\s+of\\s+",
         "^(diagnosis|history)\\s+of\\s+",
-        "^(a|an|the)\\s+"
+        "^(a|an|the)\\s+",
+        "^have\\s+",
+        "^have\\s+been\\s+"
     ],
     "age_patterns": [
+        {
+            "pattern": "aged\\s+over\\s+(\\d+)",
+            "op": ">"
+        },
+        {
+            "pattern": "aged\\s+under\\s+(\\d+)",
+            "op": "<"
+        },
+        {
+            "pattern": "over\\s+the\\s+age\\s+of\\s+(\\d+)",
+            "op": ">"
+        },
+        {
+            "pattern": "under\\s+the\\s+age\\s+of\\s+(\\d+)",
+            "op": "<"
+        },
         {
             "pattern": "under\\s+(\\d+)",
             "op": "<"
@@ -57,14 +75,37 @@
     ],
     "age_overrides": [],
     "time_patterns": [
-        { "pattern": "last\\s+(\\d+)\\s+(years|year|months|month)", "op": "last" }
+        {
+            "pattern": "last\\s+(\\d+)\\s+(years|year|months|month)",
+            "op": "last"
+        }
     ],
     "demographic_age_defaults": {
-        "adult": { "min": 18, "max": null, "inclusive": true },
-        "child": { "min": 0, "max": 17, "inclusive": true },
-        "children": { "min": 0, "max": 17, "inclusive": true },
-        "senior": { "min": 65, "max": null, "inclusive": true },
-        "elderly": { "min": 65, "max": null, "inclusive": true }
+        "adult": {
+            "min": 18,
+            "max": null,
+            "inclusive": true
+        },
+        "child": {
+            "min": 0,
+            "max": 17,
+            "inclusive": true
+        },
+        "children": {
+            "min": 0,
+            "max": 17,
+            "inclusive": true
+        },
+        "senior": {
+            "min": 65,
+            "max": null,
+            "inclusive": true
+        },
+        "elderly": {
+            "min": 65,
+            "max": null,
+            "inclusive": true
+        }
     },
     "demographic_concept_patterns": [
         "\\b(MALE|FEMALE)\\b"
