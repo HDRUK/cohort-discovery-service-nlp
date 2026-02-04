@@ -122,7 +122,12 @@ class QueryParser:
             unsupported = self.engine.find_unsupported_features(candidate)
 
             for feature in unsupported:
-                warnings.append(f"{feature.capitalize()}-based filtering is not currently supported.")
+                if feature == "sequence":
+                    warnings.append(
+                        "Temporal sequencing between events (A before/after B) is not supported."
+                    )
+                else:
+                    warnings.append(f"{feature.capitalize()}-based filtering is not currently supported.")
 
             # Skip resolver matching for age-group-only candidates (e.g. "Adults"),
             # but keep demographic concepts (e.g. "Women") so they still resolve.

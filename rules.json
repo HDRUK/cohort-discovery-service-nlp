@@ -112,7 +112,7 @@
     ],
     "unsupported_patterns": {
         "visit": "\\b(visit|gp|hospital|admitted)\\b",
-        "sequence": "\\b(after|before|later|followed by)\\b",
+        "sequence": "\\b(after|before|beforehand|later|subsequent|followed by|following|prior to|within\\s+\\d+\\s+(days?|weeks?|months?|years?)\\s+of|\\d+\\+?\\s+(days?|weeks?|months?|years?)\\s+after)\\b",
         "location": "\\b(regions|region|england|scotland|wales)\\b",
         "measurement": "\\b(above|below|mmol|value)\\b"
     }
