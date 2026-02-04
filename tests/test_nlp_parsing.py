@@ -474,6 +474,36 @@ def test_cancer_and_diabetes_with_age_constraint():
         app.state.resolver_store = previous_store
 
 
+def test_sequence_warning_for_examples():
+    queries = [
+        "Adults with a new diagnosis of heart failure who had no recorded hypertension beforehand",
+        "People with colorectal cancer who received chemotherapy and later developed neutropenia requiring hospital admission",
+        "Adults with breast cancer who later developed cardiomyopathy after anthracycline treatment",
+        "People with long COVID codes and persistent breathlessness recorded 12+ weeks after acute infection",
+        "Adults admitted with pneumonia who were not vaccinated before admission",
+        "People with type 2 diabetes and COPD, and all-cause mortality within 5 years of COPD diagnosis",
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver([]))
+    try:
+        for query in queries:
+            response = client.post(
+                "/extract?threshold=70",
+                json={"query": query},
+            )
+
+            assert response.status_code == 200
+            body = response.json()
+            assert "warnings" in body
+            assert any(
+                "Temporal sequencing between events (A before/after B) is not supported." in warning
+                for warning in body["warnings"]
+            )
+    finally:
+        app.state.resolver_store = previous_store
+
+
 def test_elderly_with_heart_failure_default_age_constraint():
     local_concepts = [
         {
