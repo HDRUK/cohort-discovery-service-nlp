@@ -422,8 +422,8 @@ def test_cancer_and_diabetes_with_age_constraint():
     local_concepts = [
         {
             "concept_id": 36684857,
-            "concept_name": "Metastatic non-small cell lung cancer",
-            "description": "Metastatic non-small cell lung cancer",
+            "concept_name": "Cancer",
+            "description": "Cancer",
             "domain_id": "Condition",
             "vocabulary_id": "SNOMED",
             "concept_class_id": "Disorder",
@@ -455,7 +455,7 @@ def test_cancer_and_diabetes_with_age_constraint():
 
         assert any(
             e.get("attributes", {}).get("description", "").lower()
-            == "metastatic non-small cell lung cancer"
+            == "Cancer"
             for e in body["entities"]
         )
         assert any(
