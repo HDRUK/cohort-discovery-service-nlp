@@ -455,7 +455,7 @@ def test_cancer_and_diabetes_with_age_constraint():
 
         assert any(
             e.get("attributes", {}).get("description", "").lower()
-            == "Cancer"
+            == "cancer"
             for e in body["entities"]
         )
         assert any(
