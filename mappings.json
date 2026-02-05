@@ -64,6 +64,11 @@
             "group": "normalise",
             "pattern": "\\b(scotland|wales|england|region|regions)\\b",
             "replacement": ""
+        },
+        {
+            "group": "normalise",
+            "pattern": "\\bobese\\b",
+            "replacement": "obesity"
         }
     ]
 }
