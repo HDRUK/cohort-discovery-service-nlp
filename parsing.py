@@ -31,6 +31,7 @@ class QueryParser:
                 self.engine.clean_candidates(candidate_without_time)
             )
             candidate_normalised = self.engine.apply_demographic_patterns(candidate_clean)
+            candidate_normalised = self.engine.apply_mappings(candidate_normalised, "normalise", warnings)
             candidate_normalised = self.engine.apply_mappings(candidate_normalised, "bmi", warnings)
             if self.engine.has_non_demographic_content(candidate_normalised):
                 has_event_candidate = True
@@ -46,6 +47,7 @@ class QueryParser:
                 self.engine.clean_candidates(candidate_without_time)
             )
             candidate_normalised = self.engine.apply_demographic_patterns(candidate_clean)
+            candidate_normalised = self.engine.apply_mappings(candidate_normalised, "normalise", warnings)
             candidate_normalised = self.engine.apply_mappings(candidate_normalised, "bmi", warnings)
 
             if not candidate_age_constraints:
@@ -96,6 +98,7 @@ class QueryParser:
                 self.engine.clean_candidates(candidate_without_time)
             )
             candidate_normalised = self.engine.apply_demographic_patterns(candidate_clean)
+            candidate_normalised = self.engine.apply_mappings(candidate_normalised, "normalise", warnings)
 
             # Negation
             negated = self.engine.is_negated(candidate)

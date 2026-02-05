@@ -36,6 +36,11 @@
         "^(a|an|the)\\s+diagnosis\\s+of\\s+",
         "^(diagnosis|history)\\s+of\\s+",
         "^(a|an|the)\\s+",
+        "^been\\s+treated\\s+for\\s+",
+        "^treated\\s+for\\s+",
+        "^treated\\s+with\\s+",
+        "^received\\s+treatment\\s+for\\s+",
+        "^underwent\\s+treatment\\s+for\\s+",
         "^have\\s+",
         "^have\\s+been\\s+"
     ],
@@ -117,7 +122,7 @@
     "unsupported_patterns": {
         "visit": "\\b(visit|gp|hospital|admitted)\\b",
         "sequence": "\\b(after|before|beforehand|later|subsequent|followed by|following|prior to|within\\s+\\d+\\s+(days?|weeks?|months?|years?)\\s+of|\\d+\\+?\\s+(days?|weeks?|months?|years?)\\s+after)\\b",
-        "location": "\\b(regions|region|england|scotland|wales)\\b",
+        "location": "\\b(regions|region|england|scotland|wales|nhs\\s+scotland)\\b",
         "measurement": "\\b(above|below|mmol|value)\\b"
     }
 }

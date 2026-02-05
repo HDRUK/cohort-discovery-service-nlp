@@ -49,6 +49,21 @@
                 "bmi",
                 "BMI"
             ]
+        },
+        {
+            "group": "normalise",
+            "pattern": "\\bfractures\\b",
+            "replacement": "fracture"
+        },
+        {
+            "group": "normalise",
+            "pattern": "\\bnhs\\s+scotland\\b",
+            "replacement": ""
+        },
+        {
+            "group": "normalise",
+            "pattern": "\\b(scotland|wales|england|region|regions)\\b",
+            "replacement": ""
         }
     ]
 }

@@ -491,6 +491,110 @@ def test_cancer_and_diabetes_with_age_constraint():
         app.state.resolver_store = previous_store
 
 
+def test_cancer_over_50_treated_for_hip_fractures():
+    local_concepts = [
+        {
+            "concept_id": 36684857,
+            "concept_name": "Cancer",
+            "description": "Cancer",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+        {
+            "concept_id": 10,
+            "concept_name": "Hip fracture",
+            "description": "Hip fracture",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={
+                "query": "People with cancer over the age of 50 who have been treated for hip fractures"
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "entities" in body
+        assert len(body["entities"]) >= 1
+
+        assert any(
+            e.get("attributes", {}).get("description", "").lower() == "cancer"
+            for e in body["entities"]
+        )
+        assert any(
+            e.get("attributes", {}).get("description", "").lower() == "hip fracture"
+            for e in body["entities"]
+        )
+
+        assert has_age_constraint(body, 50, None, False, scope="query")
+    finally:
+        app.state.resolver_store = previous_store
+
+
+def test_location_warning_and_cancer_kept_for_nhs_scotland_query():
+    local_concepts = [
+        {
+            "concept_id": 36684857,
+            "concept_name": "Cancer",
+            "description": "Cancer",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+        {
+            "concept_id": 8507,
+            "concept_name": "MALE",
+            "description": "MALE",
+            "domain_id": "Gender",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Gender",
+            "standard_concept": "S",
+        },
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "Men over 60 with cancer in NHS Scotland Regions"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "warnings" in body
+        assert any(
+            "Location-based filtering is not currently supported." in warning
+            for warning in body["warnings"]
+        )
+
+        assert any(
+            e.get("attributes", {}).get("description", "").lower() == "cancer"
+            for e in body["entities"]
+        )
+
+        assert any(
+            e.get("attributes", {}).get("description", "").lower() == "male"
+            for e in body["entities"]
+        )
+
+        assert has_age_constraint(body, 60, None, False, scope="query")
+    finally:
+        app.state.resolver_store = previous_store
+
+
 def test_sequence_warning_for_examples():
     queries = [
         "Adults with a new diagnosis of heart failure who had no recorded hypertension beforehand",
