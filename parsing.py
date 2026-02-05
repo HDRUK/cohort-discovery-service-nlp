@@ -31,6 +31,7 @@ class QueryParser:
                 self.engine.clean_candidates(candidate_without_time)
             )
             candidate_normalised = self.engine.apply_demographic_patterns(candidate_clean)
+            candidate_normalised = self.engine.apply_mappings(candidate_normalised, "normalise", warnings)
             candidate_normalised = self.engine.apply_mappings(candidate_normalised, "bmi", warnings)
             if self.engine.has_non_demographic_content(candidate_normalised):
                 has_event_candidate = True
@@ -46,6 +47,7 @@ class QueryParser:
                 self.engine.clean_candidates(candidate_without_time)
             )
             candidate_normalised = self.engine.apply_demographic_patterns(candidate_clean)
+            candidate_normalised = self.engine.apply_mappings(candidate_normalised, "normalise", warnings)
             candidate_normalised = self.engine.apply_mappings(candidate_normalised, "bmi", warnings)
 
             if not candidate_age_constraints:
@@ -96,6 +98,7 @@ class QueryParser:
                 self.engine.clean_candidates(candidate_without_time)
             )
             candidate_normalised = self.engine.apply_demographic_patterns(candidate_clean)
+            candidate_normalised = self.engine.apply_mappings(candidate_normalised, "normalise", warnings)
 
             # Negation
             negated = self.engine.is_negated(candidate)
@@ -144,14 +147,7 @@ class QueryParser:
 
             # Unsupported concepts
             unsupported = self.engine.find_unsupported_features(candidate)
-
-            for feature in unsupported:
-                if feature == "sequence":
-                    warnings.append(
-                        "Temporal sequencing between events (A before/after B) is not supported."
-                    )
-                else:
-                    warnings.append(f"{feature.capitalize()}-based filtering is not currently supported.")
+            warnings.extend(self.engine.warnings_for_features(unsupported))
 
             # Skip resolver matching for age-group-only candidates (e.g. "Adults"),
             # but keep demographic concepts (e.g. "Women") so they still resolve.

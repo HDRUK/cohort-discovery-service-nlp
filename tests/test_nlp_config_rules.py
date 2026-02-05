@@ -27,7 +27,7 @@ def test_rules_age_patterns_from_config():
 
 def test_rules_unsupported_patterns_from_config():
     engine = RuleEngine()
-    assert engine.unsupported_patterns["visit"].search("hospital visit") is not None
+    assert engine.unsupported_patterns["visit"]["pattern"].search("hospital visit") is not None
 
 
 def test_rules_age_overrides_from_config(tmp_path, monkeypatch):
@@ -39,7 +39,7 @@ def test_rules_age_overrides_from_config(tmp_path, monkeypatch):
         "age_overrides": [
             {"pattern": "aged\\s+under\\s+18", "min": None, "max": 18, "inclusive": False}
         ],
-        "unsupported_patterns": {"visit": "\\bvisit\\b"},
+        "unsupported_patterns": {"visit": {"pattern": "\\bvisit\\b", "warning": "Visit warning"}},
     }
     rules_path.write_text(json.dumps(base_rules), encoding="utf-8")
 
