@@ -133,6 +133,8 @@ class Entity(BaseModel):
 class QueryResponse(BaseModel):
     entities: List[Entity]
     warnings: List[str] = []
+    age_constraints: List[Dict[str, Any]] = []
+    time_constraints: List[Dict[str, Any]] = []
 
 
 # ------------------------------------------------------------

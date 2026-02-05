@@ -45,6 +45,10 @@
             "op": ">"
         },
         {
+            "pattern": "aged\\s+(\\d+)\\+",
+            "op": ">="
+        },
+        {
             "pattern": "aged\\s+under\\s+(\\d+)",
             "op": "<"
         },

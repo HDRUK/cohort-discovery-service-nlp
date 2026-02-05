@@ -15,6 +15,8 @@ class QueryParser:
         warnings: List[str] = []
         global_age_constraints, _ = self.engine.extract_age_constraints(query, "query")
         global_time_constraints, _ = self.engine.extract_time_constraints(query, "query")
+        query_age_constraints = list(global_age_constraints)
+        query_time_constraints = list(global_time_constraints)
         entity_age_constraints_all: List[Dict[str, Any]] = []
         entity_time_constraints_all: List[Dict[str, Any]] = []
         has_event_candidate = False
@@ -58,18 +60,29 @@ class QueryParser:
                         }
                     )
 
+            demographic_only = (
+                not self.engine.has_non_demographic_content(candidate_normalised)
+                and not self.engine.has_demographic_concept(candidate_normalised)
+            )
+
             if candidate_age_constraints:
-                if not has_event_candidate:
+                if demographic_only or not has_event_candidate:
                     for constraint in candidate_age_constraints:
                         constraint["scope"] = "query"
+                    query_age_constraints = self.engine.merge_age_constraints(
+                        query_age_constraints, candidate_age_constraints
+                    )
                 entity_age_constraints_all = self.engine.merge_age_constraints(
                     entity_age_constraints_all, candidate_age_constraints
                 )
 
             if candidate_time_constraints:
-                if not has_event_candidate:
+                if demographic_only or not has_event_candidate:
                     for constraint in candidate_time_constraints:
                         constraint["scope"] = "query"
+                    query_time_constraints = self.engine.merge_time_constraints(
+                        query_time_constraints, candidate_time_constraints
+                    )
                 entity_time_constraints_all = self.engine.merge_time_constraints(
                     entity_time_constraints_all, candidate_time_constraints
                 )
@@ -118,6 +131,17 @@ class QueryParser:
                     global_time_constraints, candidate_time_constraints
                 )
 
+            entity_age_constraints = [
+                constraint
+                for constraint in entity_age_constraints
+                if constraint.get("scope") != "query"
+            ]
+            entity_time_constraints = [
+                constraint
+                for constraint in entity_time_constraints
+                if constraint.get("scope") != "query"
+            ]
+
             # Unsupported concepts
             unsupported = self.engine.find_unsupported_features(candidate)
 
@@ -163,4 +187,9 @@ class QueryParser:
                     }
                 )
 
-        return {"entities": entities, "warnings": warnings}
+        return {
+            "entities": entities,
+            "warnings": warnings,
+            "age_constraints": query_age_constraints,
+            "time_constraints": query_time_constraints,
+        }
