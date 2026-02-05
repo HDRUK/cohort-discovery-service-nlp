@@ -120,9 +120,29 @@
         "\\b(MALE|FEMALE)\\b"
     ],
     "unsupported_patterns": {
-        "visit": "\\b(visit|gp|hospital|admitted)\\b",
-        "sequence": "\\b(after|before|beforehand|later|subsequent|followed by|following|prior to|within\\s+\\d+\\s+(days?|weeks?|months?|years?)\\s+of|\\d+\\+?\\s+(days?|weeks?|months?|years?)\\s+after)\\b",
-        "location": "\\b(regions|region|england|scotland|wales|nhs\\s+scotland)\\b",
-        "measurement": "\\b(above|below|mmol|value)\\b"
+        "visit": {
+            "pattern": "\\b(visit|gp|hospital|admitted)\\b",
+            "warning": "Visit-based filtering is not currently supported."
+        },
+        "sequence": {
+            "pattern": "\\b(after|before|beforehand|later|subsequent|followed by|following|prior to|within\\s+\\d+\\s+(days?|weeks?|months?|years?)\\s+of|\\d+\\+?\\s+(days?|weeks?|months?|years?)\\s+after)\\b",
+            "warning": "Temporal sequencing between events (A before/after B) is not supported."
+        },
+        "location": {
+            "pattern": "\\b(regions|region|england|scotland|wales|nhs\\s+scotland)\\b",
+            "warning": "Location-based filtering is not currently supported."
+        },
+        "measurement": {
+            "pattern": "\\b(above|below|mmol|value)\\b",
+            "warning": "Measurement-based filtering is not currently supported."
+        },
+        "negation_scope": {
+            "pattern": "\\b(no|not|without|never)\\b.*\\b(medication|medications|prescribed|treatment|therapy|antihypertensive|antihypertensives)\\b",
+            "warning": "Negated treatment/medication criteria may be unreliable due to incomplete records."
+        },
+        "occurrence_count": {
+            "pattern": "\\b(\\d+\\+|\\d+|multiple|several|recurrent|repeat|repeated|at least \\d+|more than \\d+|\\d+ or more)\\b.*\\b(episode|episodes|course|courses|dose|doses|admission|admissions|visit|visits|occurrence|occurrences)\\b",
+            "warning": "The ability to filter on multiple occurrences is not currently supported."
+        }
     }
 }

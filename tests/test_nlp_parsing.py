@@ -595,6 +595,52 @@ def test_location_warning_and_cancer_kept_for_nhs_scotland_query():
         app.state.resolver_store = previous_store
 
 
+def test_negated_medication_warning_for_absence_query():
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver([]))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={
+                "query": "Adults with hypertension who are not currently prescribed any antihypertensive medication"
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "warnings" in body
+        assert any(
+            "Negated treatment/medication criteria may be unreliable due to incomplete records."
+            in warning
+            for warning in body["warnings"]
+        )
+    finally:
+        app.state.resolver_store = previous_store
+
+
+def test_occurrence_count_warning_for_multiple_courses_query():
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver([]))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={
+                "query": "People with asthma who have had 2+ oral steroid courses in the last 12 months"
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "warnings" in body
+        assert any(
+            "The ability to filter on multiple occurrences is not currently supported."
+            in warning
+            for warning in body["warnings"]
+        )
+    finally:
+        app.state.resolver_store = previous_store
+
+
 def test_sequence_warning_for_examples():
     queries = [
         "Adults with a new diagnosis of heart failure who had no recorded hypertension beforehand",

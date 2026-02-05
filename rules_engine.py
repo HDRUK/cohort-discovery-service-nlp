@@ -75,8 +75,11 @@ def load_rules() -> Dict[str, Any]:
             for pattern in data.get("demographic_concept_patterns", [])
         ],
         "unsupported_patterns": {
-            name: re.compile(pattern, re.IGNORECASE)
-            for name, pattern in data.get("unsupported_patterns", {}).items()
+            name: {
+                "pattern": re.compile(entry.get("pattern", ""), re.IGNORECASE),
+                "warning": entry.get("warning", ""),
+            }
+            for name, entry in data.get("unsupported_patterns", {}).items()
         },
     }
 
@@ -235,7 +238,19 @@ class RuleEngine:
         return any(pattern.search(text) for pattern in self.demographic_concept_patterns)
 
     def find_unsupported_features(self, text: str) -> List[str]:
-        return [name for name, pattern in self.unsupported_patterns.items() if pattern.search(text)]
+        return [
+            name
+            for name, entry in self.unsupported_patterns.items()
+            if entry["pattern"].search(text)
+        ]
+
+    def warnings_for_features(self, features: List[str]) -> List[str]:
+        warnings = []
+        for feature in features:
+            warning = self.unsupported_patterns.get(feature, {}).get("warning")
+            if warning:
+                warnings.append(warning)
+        return warnings
 
     def is_negated(self, text: str) -> bool:
         for term in NEGATION_TERMS:
