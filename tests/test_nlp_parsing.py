@@ -27,6 +27,21 @@ app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(concepts))
 
 client = TestClient(app)
 
+def has_age_constraint(body, min_age, max_age, inclusive, scope=None):
+    constraints = list(body.get("age_constraints", []))
+    for entity in body.get("entities", []):
+        constraints.extend(entity.get("age_constraints", []))
+    for constraint in constraints:
+        if scope is not None and constraint.get("scope") != scope:
+            continue
+        if (
+            constraint.get("min") == min_age
+            and constraint.get("max") == max_age
+            and constraint.get("inclusive") is inclusive
+        ):
+            return True
+    return False
+
 def test_adults_type2_diabetes_last_2_years():
     response = client.post(
         "/extract?threshold=70",
@@ -55,14 +70,7 @@ def test_adults_type2_diabetes_last_2_years():
     assert negated is False
 
     # Age
-    assert any(
-        e.get("age_constraints")
-        and e["age_constraints"][0]["min"] == 24
-        and e["age_constraints"][0]["max"] is None
-        and e["age_constraints"][0]["inclusive"] is False
-        and e["age_constraints"][0]["scope"] in {"query", "entity"}
-        for e in body["entities"]
-    )
+    assert has_age_constraint(body, 24, None, False)
 
     # Warnings
     assert body.get("warnings") == []
@@ -118,14 +126,7 @@ def test_women_over_50_with_diabetes_age_constraint():
     assert "entities" in body
     assert len(body["entities"]) >= 1
 
-    assert any(
-        e.get("age_constraints")
-        and e["age_constraints"][0]["min"] == 50
-        and e["age_constraints"][0]["max"] is None
-        and e["age_constraints"][0]["inclusive"] is False
-        and e["age_constraints"][0]["scope"] in {"query", "entity"}
-        for e in body["entities"]
-    )
+    assert has_age_constraint(body, 50, None, False)
 
 def test_women_under_60_hip_fracture_entity_age_constraint():
     local_concepts = [
@@ -210,14 +211,7 @@ def test_adults_aged_18_30_with_diagnosis_of_asthma():
             for e in body["entities"]
         )
 
-        assert any(
-            e.get("age_constraints")
-            and e["age_constraints"][0]["min"] == 18
-            and e["age_constraints"][0]["max"] == 30
-            and e["age_constraints"][0]["inclusive"] is True
-            and e["age_constraints"][0]["scope"] == "entity"
-            for e in body["entities"]
-        )
+        assert has_age_constraint(body, 18, 30, True, scope="query")
     finally:
         app.state.resolver_store = previous_store
 
@@ -252,14 +246,43 @@ def test_people_aged_65_plus_with_diagnosed_hypertension():
             for e in body["entities"]
         )
 
+        assert has_age_constraint(body, 65, None, True, scope="query")
+    finally:
+        app.state.resolver_store = previous_store
+
+
+def test_people_aged_65_plus_age_constraint_cleaned():
+    local_concepts = [
+        {
+            "concept_id": 41,
+            "concept_name": "Hypertension",
+            "description": "Hypertension",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "People aged 65+ with diagnosed hypertension"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "entities" in body
+        assert len(body["entities"]) >= 1
+
         assert any(
-            e.get("age_constraints")
-            and e["age_constraints"][0]["min"] == 65
-            and e["age_constraints"][0]["max"] is None
-            and e["age_constraints"][0]["inclusive"] is True
-            and e["age_constraints"][0]["scope"] == "entity"
+            e.get("attributes", {}).get("description", "").lower() == "hypertension"
             for e in body["entities"]
         )
+
+        assert has_age_constraint(body, 65, None, True, scope="query")
     finally:
         app.state.resolver_store = previous_store
 
@@ -407,13 +430,7 @@ def test_children_with_asthma_default_age_constraint():
             for e in body["entities"]
         )
 
-        assert any(
-            e.get("age_constraints")
-            and e["age_constraints"][0]["min"] == 0
-            and e["age_constraints"][0]["max"] == 17
-            and e["age_constraints"][0]["inclusive"] is True
-            for e in body["entities"]
-        )
+        assert has_age_constraint(body, 0, 17, True, scope="query")
     finally:
         app.state.resolver_store = previous_store
 
@@ -535,12 +552,6 @@ def test_elderly_with_heart_failure_default_age_constraint():
             for e in body["entities"]
         )
 
-        assert any(
-            e.get("age_constraints")
-            and e["age_constraints"][0]["min"] == 65
-            and e["age_constraints"][0]["max"] is None
-            and e["age_constraints"][0]["inclusive"] is True
-            for e in body["entities"]
-        )
+        assert has_age_constraint(body, 65, None, True, scope="query")
     finally:
         app.state.resolver_store = previous_store
