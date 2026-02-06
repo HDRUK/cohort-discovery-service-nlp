@@ -1,0 +1,148 @@
+{
+    "splitters": [
+        ",\\s+",
+        "\\sand\\s",
+        "\\swith\\s",
+        "\\swho have\\s",
+        "\\swho has\\s",
+        "\\swho received\\s",
+        "\\swho have received\\s",
+        "\\swho has received\\s",
+        "\\swho've\\s",
+        "\\swho has been\\s",
+        "\\swho have been\\s",
+        "\\swho were given\\s",
+        "\\swho got\\s",
+        "\\spatients who\\s",
+        "\\speople who\\s",
+        "\\sdue to\\s",
+        "\\sbecause of\\s",
+        ";\\s*",
+        "\\swhen they\\s",
+        "\\swhen he\\s",
+        "\\swhen she\\s",
+        "\\swhen patients\\s",
+        "\\swhen people\\s"
+    ],
+    "leading_verbs": [
+        "^(received|got|given|administered)\\s+",
+        "^vaccinated\\s+with\\s+",
+        "^vaccination\\s+with\\s+",
+        "^(suffered|had|experienced)\\s+",
+        "^diagnosed\\s+with\\s+",
+        "^diagnosed\\s+",
+        "^(diagnosed|diagnosis)\\s+in\\s+the\\s+",
+        "^(diagnosed|diagnosis)\\s+in\\s+",
+        "^(a|an|the)\\s+diagnosis\\s+of\\s+",
+        "^(diagnosis|history)\\s+of\\s+",
+        "^(a|an|the)\\s+",
+        "^been\\s+treated\\s+for\\s+",
+        "^treated\\s+for\\s+",
+        "^treated\\s+with\\s+",
+        "^received\\s+treatment\\s+for\\s+",
+        "^underwent\\s+treatment\\s+for\\s+",
+        "^have\\s+",
+        "^have\\s+been\\s+"
+    ],
+    "age_patterns": [
+        {
+            "pattern": "aged\\s+over\\s+(\\d+)",
+            "op": ">"
+        },
+        {
+            "pattern": "aged\\s+(\\d+)\\+",
+            "op": ">="
+        },
+        {
+            "pattern": "aged\\s+under\\s+(\\d+)",
+            "op": "<"
+        },
+        {
+            "pattern": "over\\s+the\\s+age\\s+of\\s+(\\d+)",
+            "op": ">"
+        },
+        {
+            "pattern": "under\\s+the\\s+age\\s+of\\s+(\\d+)",
+            "op": "<"
+        },
+        {
+            "pattern": "under\\s+(\\d+)",
+            "op": "<"
+        },
+        {
+            "pattern": "over\\s+(\\d+)",
+            "op": ">"
+        },
+        {
+            "pattern": "(\\d+)\\+",
+            "op": ">="
+        },
+        {
+            "pattern": "aged\\s+(\\d+)\\s*[-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2212]\\s*(\\d+)",
+            "op": "range"
+        }
+    ],
+    "age_overrides": [],
+    "time_patterns": [
+        {
+            "pattern": "last\\s+(\\d+)\\s+(years|year|months|month)",
+            "op": "last"
+        }
+    ],
+    "demographic_age_defaults": {
+        "adult": {
+            "min": 18,
+            "max": null,
+            "inclusive": true
+        },
+        "child": {
+            "min": 0,
+            "max": 17,
+            "inclusive": true
+        },
+        "children": {
+            "min": 0,
+            "max": 17,
+            "inclusive": true
+        },
+        "senior": {
+            "min": 65,
+            "max": null,
+            "inclusive": true
+        },
+        "elderly": {
+            "min": 65,
+            "max": null,
+            "inclusive": true
+        }
+    },
+    "demographic_concept_patterns": [
+        "\\b(MALE|FEMALE)\\b"
+    ],
+    "unsupported_patterns": {
+        "visit": {
+            "pattern": "\\b(visit|gp|hospital|admitted)\\b",
+            "warning": "Visit-based filtering is not currently supported."
+        },
+        "sequence": {
+            "pattern": "\\b(after|before|beforehand|later|subsequent|followed by|following|prior to|within\\s+\\d+\\s+(days?|weeks?|months?|years?)\\s+of|\\d+\\+?\\s+(days?|weeks?|months?|years?)\\s+after)\\b",
+            "warning": "Temporal sequencing between events (A before/after B) is not supported."
+        },
+        "location": {
+            "pattern": "\\b(regions|region|england|scotland|wales|nhs\\s+scotland)\\b",
+            "warning": "Location-based filtering is not currently supported."
+        },
+        "measurement": {
+            "pattern": "\\b(above|below|mmol|value)\\b",
+            "warning": "Measurement-based filtering is not currently supported."
+        },
+        "negation_scope": {
+            "pattern": "\\b(no|not|without|never)\\b.*\\b(medication|medications|prescribed|treatment|therapy|antihypertensive|antihypertensives)\\b",
+            "warning": "Negated treatment/medication criteria may be unreliable due to incomplete records."
+        },
+        "occurrence_count": {
+            "pattern": "\\b(\\d+\\+|\\d+|multiple|several|recurrent|repeat|repeated|at least \\d+|more than \\d+|\\d+ or more)\\b.*\\b(episode|episodes|course|courses|dose|doses|admission|admissions|visit|visits|occurrence|occurrences)\\b",
+            "warning": "The ability to filter on multiple occurrences is not currently supported."
+        }
+    }
+}

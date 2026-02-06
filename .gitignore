@@ -1,3 +1,7 @@
 .env
 npm-debug.log
 node_modules
+tests/__pycache__
+.vscode
+__pycache__
+.pytest_cache

@@ -1,15 +1,18 @@
 import os
-import re
-import string
-from datetime import timedelta
-from fastapi import FastAPI, Query, Request, Depends
-from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
-from dotenv import load_dotenv
-import mysql.connector
-
+import sys
+import time
 from contextlib import asynccontextmanager
+from typing import Any, Dict, List, Optional
+
+import mysql.connector
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, Query, Request
+from pydantic import BaseModel
+
+from parsing import QueryParser
+from rules_engine import RuleEngine
 from store import ResolverStore
+
 
 # Load environment variables
 load_dotenv()
@@ -33,11 +36,20 @@ DEFAULT_THRESHOLD = os.getenv("DEFAULT_THRESHOLD", 90)
 # Load OMOP concepts from MySQL
 # ------------------------------------------------------------
 def load_concepts_from_mysql():
+    start_time = time.time()
+
+    # Connection phase
+    conn_start = time.time()
     conn = mysql.connector.connect(**DB_CONFIG)
     cursor = conn.cursor(dictionary=True)
-    cursor.execute(f"""
+    conn_time = time.time() - conn_start
+
+    # Query execution phase
+    query_start = time.time()
+    cursor.execute(
+        f"""
         SELECT
-            concept_id,
+            DISTINCT(concept_id),
             concept_name,
             description,
             domain_id,
@@ -48,9 +60,32 @@ def load_concepts_from_mysql():
         WHERE
             concept_name IS NOT NULL
             OR description IS NOT NULL;
-    """)
+    """
+    )
+    query_time = time.time() - query_start
+
+    # Fetch phase
+    fetch_start = time.time()
     concepts = cursor.fetchall()
+    fetch_time = time.time() - fetch_start
+
     conn.close()
+
+    total_time = time.time() - start_time
+
+    # Estimate memory usage (rough approximation)
+    concepts_size = sys.getsizeof(concepts)
+
+    # Print profiling information
+    print("\n[Profiling] load_concepts_from_mysql")
+    print(f"  - Connection time: {conn_time*1000:.2f}ms")
+    print(f"  - Query execution time: {query_time*1000:.2f}ms")
+    print(f"  - Fetch time: {fetch_time*1000:.2f}ms")
+    print(f"  - Total time: {total_time*1000:.2f}ms")
+    print(f"  - Concepts loaded: {len(concepts)}")
+    print(f"  - Estimated memory: {concepts_size / 1024 / 1024:.2f}MB")
+    print(f"  - TTL: {STORE_REFRESH_TTL}s\n")
+
     return concepts
 
 
@@ -72,52 +107,9 @@ def get_resolver_store(request: Request) -> ResolverStore:
 # FastAPI app
 app = FastAPI(title="Project Daphne NLP Service", version="1.0", lifespan=lifespan)
 
-
-# ------------------------------------------------------------
-
-
-def split_candidates(text: str) -> List[str]:
-    """
-    Split text into candidate phrases based on common clinical separators.
-    """
-    splitters = r", | and | with | who has | due to | because of |; "
-    candidates = [
-        s.strip() for s in re.split(splitters, text, flags=re.IGNORECASE) if s.strip()
-    ]
-    print(f"found candidates {candidates}")
-    return candidates
-
-
-def clean_candidates(text: str) -> str:
-    text = text.translate(str.maketrans("", "", string.punctuation))
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
-
-def is_negated(text: str) -> bool:
-    """
-    Returns True if any negation term appears as a whole word in the text.
-    """
-    for term in NEGATION_TERMS:
-        if re.search(rf"\b{re.escape(term)}\b", text, re.IGNORECASE):
-            print(f"Negation term matched: '{term}' in '{text}'")
-            return True
-    return False
-
-
-NEGATION_TERMS = {"no", "not", "without", "never"}
-AGE_PATTERNS = [
-    (re.compile(r"under\s+(\d+)", re.I), "<"),
-    (re.compile(r"over\s+(\d+)", re.I), ">"),
-    (re.compile(r"(\d+)\+", re.I), ">="),
-    (re.compile(r"aged\s+(\d+)[--](\d+)", re.I), "range"),
-]
-
-UNSUPPORTED_PATTERNS = {
-    "visit": re.compile(r"\b(visit|gp|hospital|admitted)\b", re.I),
-    "sequence": re.compile(r"\b(after|before|later|followed by)\b", re.I),
-    "location": re.compile(r"\b(regions|region|england|scotland|wales)\b", re.I),
-    "measurement": re.compile(r"\b(above|below|mmol|value)\b", re.I),
-}
+# Parsing engine
+ENGINE = RuleEngine()
+PARSER = QueryParser(ENGINE)
 
 
 # ------------------------------------------------------------
@@ -134,12 +126,15 @@ class Entity(BaseModel):
     end: int
     attributes: Dict[str, Any]
     age_constraints: List[Dict[str, Any]] = []
+    time_constraints: List[Dict[str, Any]] = []
     negated: bool = False
 
 
 class QueryResponse(BaseModel):
     entities: List[Entity]
     warnings: List[str] = []
+    age_constraints: List[Dict[str, Any]] = []
+    time_constraints: List[Dict[str, Any]] = []
 
 
 # ------------------------------------------------------------
@@ -151,90 +146,21 @@ async def extract_entities(
     threshold: float = Query(
         DEFAULT_THRESHOLD, description="Fuzzy match threshold 0-100"
     ),
+    phrase_first: bool = Query(
+        True, description="Prefer phrase overlap when token matching is available"
+    ),
     store: ResolverStore = Depends(get_resolver_store),
 ):
     """
     Extract clinical concepts from query using fuzzy matching.
     """
     resolver = await store.get_resolver()
-    candidates = split_candidates(payload.query)
-    entities = []
-    seen = set()
-    entity_age_constraints = []
-    warnings = []
+    ret_value = PARSER.extract(payload.query, threshold, phrase_first, resolver)
 
-    for candidate in candidates:
-        candidate_clean = clean_candidates(candidate)
+    print(f"[Request] query='{payload.query}' => entities={ret_value}")
+    
+    return ret_value
 
-        # Negation
-        negated = is_negated(candidate)
-
-        print(f"Processing candidate: '{candidate}' (clean: '{candidate_clean}'), negated={negated}")
-
-        # Age constraints
-        age_constraints = []
-        for pattern, op in AGE_PATTERNS:
-            m = pattern.search(candidate)
-            if m:
-                age_constraints.append({"operator": op, "values": list(m.groups())})
-
-        entity_age_constraints = age_constraints
-
-        # Unsupported concepts
-        unsupported = [
-            name for name, pattern in UNSUPPORTED_PATTERNS.items() if pattern.search(candidate)
-        ]
-
-        for feature in unsupported:
-            warnings.append(f"{feature.capitalize()}-based filtering is not currently supported.")
-
-        # Resolve concepts
-        matches = resolver.resolve(candidate_clean, threshold)
-        index = payload.query.lower().find(candidate.lower())
-
-        ## LS - Not needed, as this will default to creating a 'condition' based on the query context
-        ## in the event of no matches. Causes some confusion. Left in for completeness.
-        ##
-        # if not matches:
-        #     # No matches found, still record the candidate
-        #     index = payload.query.lower().find(candidate.lower())
-        #     start_idx = index
-        #     end_idx = start_idx + len(candidate)
-
-        #     entities.append({
-        #         "text": candidate,
-        #         "label": None,
-        #         "start": start_idx,
-        #         "end": end_idx,
-        #         "negated": negated,
-        #         "age_constraints": entity_age_constraints if entity_age_constraints is not None else [],
-        #         "attributes": {},
-        #     })
-        #     continue
-
-        for match in matches:
-            key = (match["concept_id"], candidate.lower(), index)
-            if key in seen:
-                continue
-            seen.add(key)
-
-            start_idx = index
-            end_idx = start_idx + len(candidate)
-
-            entities.append({
-                "text": candidate,
-                "label": match.get("domain_id"),
-                "start": start_idx,
-                "end": end_idx,
-                "negated": negated,
-                "age_constraints": entity_age_constraints if entity_age_constraints is not None else [],
-                "attributes": match,
-            })
-
-    return {
-        "entities": entities,
-        "warnings": warnings,
-    }
 
 @app.get("/")
 def root():

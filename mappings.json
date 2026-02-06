@@ -1,0 +1,69 @@
+{
+    "mappings": [
+        {
+            "group": "demographic",
+            "pattern": "\\bmales\\b",
+            "replacement": "MALE"
+        },
+        {
+            "group": "demographic",
+            "pattern": "\\bmen\\b",
+            "replacement": "MALE"
+        },
+        {
+            "group": "demographic",
+            "pattern": "\\bboys\\b",
+            "replacement": "MALE"
+        },
+        {
+            "group": "demographic",
+            "pattern": "\\bwomen\\b",
+            "replacement": "FEMALE"
+        },
+        {
+            "group": "demographic",
+            "pattern": "\\bfemales\\b",
+            "replacement": "FEMALE"
+        },
+        {
+            "group": "demographic",
+            "pattern": "\\bgirls\\b",
+            "replacement": "FEMALE"
+        },
+        {
+            "group": "bmi",
+            "pattern": "\\bBMI\\b.*\\b(over|>=|greater than|>)\\s*(\\d+)\\b",
+            "replacement": "obesity",
+            "warning": "BMI threshold mapped to obesity",
+            "contains": [
+                "bmi",
+                "BMI"
+            ]
+        },
+        {
+            "group": "bmi",
+            "pattern": "\\bBMI\\b.*\\b(under|<=|less than|<)\\s*(\\d+(\\.\\d+)?)\\b",
+            "replacement": "underweight",
+            "warning": "BMI threshold mapped to underweight",
+            "contains": [
+                "bmi",
+                "BMI"
+            ]
+        },
+        {
+            "group": "normalise",
+            "pattern": "\\bfractures\\b",
+            "replacement": "fracture"
+        },
+        {
+            "group": "normalise",
+            "pattern": "\\bnhs\\s+scotland\\b",
+            "replacement": ""
+        },
+        {
+            "group": "normalise",
+            "pattern": "\\b(scotland|wales|england|region|regions)\\b",
+            "replacement": ""
+        }
+    ]
+}
