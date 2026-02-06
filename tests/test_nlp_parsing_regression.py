@@ -1,6 +1,9 @@
 from fastapi.testclient import TestClient
+import importlib
+
 from app import app
 from fuzzy_concept_resolver import FuzzyConceptResolver
+import rules_engine
 
 
 class LocalResolverStore:
@@ -432,6 +435,98 @@ def test_stroke_with_last_five_years_time_constraint():
         )
     finally:
         app.state.resolver_store = previous_store
+
+
+def test_acronym_expansion_for_copd():
+    local_concepts = [
+        {
+            "concept_id": 255573,
+            "concept_name": "Chronic obstructive pulmonary disease",
+            "description": "Chronic obstructive pulmonary disease",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "People with COPD"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "entities" in body
+        assert any(
+            e.get("attributes", {}).get("description", "").lower()
+            == "chronic obstructive pulmonary disease"
+            for e in body["entities"]
+        )
+    finally:
+        app.state.resolver_store = previous_store
+
+
+def test_acronym_expansion_for_ckd():
+    local_concepts = [
+        {
+            "concept_id": 192279,
+            "concept_name": "Chronic kidney disease",
+            "description": "Chronic kidney disease",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "People with CKD"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "entities" in body
+        assert any(
+            e.get("attributes", {}).get("description", "").lower()
+            == "chronic kidney disease"
+            for e in body["entities"]
+        )
+    finally:
+        app.state.resolver_store = previous_store
+
+
+def test_acronym_expansion_disabled_via_env(monkeypatch):
+    monkeypatch.setenv("ACRONYM_ENABLED", "false")
+    importlib.reload(rules_engine)
+    from parsing import QueryParser
+    from rules_engine import RuleEngine
+
+    engine = RuleEngine()
+    parser = QueryParser(engine)
+    resolver = FuzzyConceptResolver(
+        [
+            {
+                "concept_id": 255573,
+                "concept_name": "Chronic obstructive pulmonary disease",
+                "description": "Chronic obstructive pulmonary disease",
+            }
+        ]
+    )
+
+    result = parser.extract("People with COPD", 70, True, resolver)
+    assert not any(
+        e.get("attributes", {}).get("description", "").lower()
+        == "chronic obstructive pulmonary disease"
+        for e in result.get("entities", [])
+    )
 
 
 def test_sequence_warning_for_examples():

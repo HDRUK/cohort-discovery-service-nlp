@@ -89,9 +89,17 @@ def load_concepts_from_mysql():
     return concepts
 
 
+def enrich_resolver(resolver, concepts):
+    resolver.acronym_index = ENGINE.build_acronym_index(concepts)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    store = ResolverStore(load_concepts_from_mysql, ttl_seconds=STORE_REFRESH_TTL)
+    store = ResolverStore(
+        load_concepts_from_mysql,
+        ttl_seconds=STORE_REFRESH_TTL,
+        postprocess=enrich_resolver,
+    )
     resolver = await store.get_resolver()
     app.state.resolver_store = store
     print(
@@ -137,6 +145,16 @@ class QueryResponse(BaseModel):
     time_constraints: List[Dict[str, Any]] = []
 
 
+class AcronymEntry(BaseModel):
+    acronym: str
+    concepts: List[str]
+
+
+class AcronymResponse(BaseModel):
+    total: int
+    items: List[AcronymEntry]
+
+
 # ------------------------------------------------------------
 # Endpoints
 # ------------------------------------------------------------
@@ -167,3 +185,31 @@ def root():
     return {
         "message": "Cohort Discovery NLP Service running. POST to /extract with {query: 'your text'}"
     }
+
+
+@app.get("/acronyms", response_model=AcronymResponse)
+async def list_acronyms(
+    prefix: Optional[str] = Query(None, description="Filter acronyms by prefix"),
+    min_len: Optional[int] = Query(None, ge=1, description="Minimum acronym length"),
+    max_len: Optional[int] = Query(None, ge=1, description="Maximum acronym length"),
+    limit: int = Query(100, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Offset into the acronym list"),
+    store: ResolverStore = Depends(get_resolver_store),
+):
+    resolver = await store.get_resolver()
+    acronym_index = getattr(resolver, "acronym_index", {}) or {}
+    entries = []
+    for acronym, concepts in acronym_index.items():
+        if prefix and not acronym.startswith(prefix.upper()):
+            continue
+        if min_len is not None and len(acronym) < min_len:
+            continue
+        if max_len is not None and len(acronym) > max_len:
+            continue
+        entries.append((acronym, concepts))
+
+    entries.sort(key=lambda item: item[0])
+    total = len(entries)
+    sliced = entries[offset : offset + limit]
+    items = [{"acronym": acronym, "concepts": concepts} for acronym, concepts in sliced]
+    return {"total": total, "items": items}
