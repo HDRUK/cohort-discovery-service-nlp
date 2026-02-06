@@ -41,6 +41,8 @@
         "^treated\\s+with\\s+",
         "^received\\s+treatment\\s+for\\s+",
         "^underwent\\s+treatment\\s+for\\s+",
+        "^recorded\\s+in\\s+the\\s+",
+        "^recorded\\s+in\\s+",
         "^have\\s+",
         "^have\\s+been\\s+"
     ],
@@ -84,6 +86,10 @@
     ],
     "age_overrides": [],
     "time_patterns": [
+        {
+            "pattern": "recorded\\s+in\\s+(?:the\\s+)?last\\s+(\\d+)\\s+(years|year|months|month)",
+            "op": "last"
+        },
         {
             "pattern": "last\\s+(\\d+)\\s+(years|year|months|month)",
             "op": "last"
@@ -143,6 +149,10 @@
         "occurrence_count": {
             "pattern": "\\b(\\d+\\+|\\d+|multiple|several|recurrent|repeat|repeated|at least \\d+|more than \\d+|\\d+ or more)\\b.*\\b(episode|episodes|course|courses|dose|doses|admission|admissions|visit|visits|occurrence|occurrences)\\b",
             "warning": "The ability to filter on multiple occurrences is not currently supported."
+        },
+        "age_ambiguity": {
+            "pattern": "\\b(aged|age|over|under)\\b|\\b\\d+\\s*[-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2212]\\s*\\d+\\b|\\b\\d+\\+\\b",
+            "warning": "Age criteria may be ambiguous (current age vs age at diagnosis)."
         }
     }
 }

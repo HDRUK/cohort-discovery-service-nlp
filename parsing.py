@@ -23,6 +23,7 @@ class QueryParser:
 
         # Pre-pass: detect whether any candidate includes non-demographic content
         for candidate in candidates:
+            defaults_applied = False
             candidate_age_constraints, candidate_without_age = self.engine.extract_age_constraints(candidate, "entity")
             candidate_time_constraints, candidate_without_time = self.engine.extract_time_constraints(
                 candidate_without_age, "entity"
@@ -53,6 +54,7 @@ class QueryParser:
             if not candidate_age_constraints:
                 defaults = self.engine.find_demographic_age_default(candidate)
                 if defaults:
+                    defaults_applied = True
                     candidate_age_constraints.append(
                         {
                             "min": defaults.get("min"),
@@ -62,13 +64,14 @@ class QueryParser:
                         }
                     )
 
+            demographic_only_for_scope = not self.engine.has_non_demographic_content(candidate_normalised)
             demographic_only = (
-                not self.engine.has_non_demographic_content(candidate_normalised)
+                demographic_only_for_scope
                 and not self.engine.has_demographic_concept(candidate_normalised)
             )
 
             if candidate_age_constraints:
-                if demographic_only or not has_event_candidate:
+                if defaults_applied or demographic_only_for_scope or not has_event_candidate:
                     for constraint in candidate_age_constraints:
                         constraint["scope"] = "query"
                     query_age_constraints = self.engine.merge_age_constraints(
@@ -79,7 +82,7 @@ class QueryParser:
                 )
 
             if candidate_time_constraints:
-                if demographic_only or not has_event_candidate:
+                if demographic_only_for_scope or not has_event_candidate:
                     for constraint in candidate_time_constraints:
                         constraint["scope"] = "query"
                     query_time_constraints = self.engine.merge_time_constraints(
