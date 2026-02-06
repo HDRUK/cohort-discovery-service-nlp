@@ -49,6 +49,22 @@ def load_rules() -> Dict[str, Any]:
         print(f"[Config] invalid rules JSON in {rules_path}: {exc}")
         sys.exit(1)
 
+    acronym_rules = data.get(
+        "acronym_rules",
+        {
+            "min_len": 2,
+            "max_len": 6,
+            "token_min_len": 2,
+            "token_max_len": 20,
+            "stopwords": [],
+        },
+    )
+    env_enabled = os.getenv("ACRONYM_ENABLED")
+    if env_enabled is not None:
+        acronym_rules["enabled"] = env_enabled.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        acronym_rules["enabled"] = True
+
     return {
         "splitters": data.get("splitters", []),
         "leading_verbs": [re.compile(p, re.IGNORECASE) for p in data.get("leading_verbs", [])],
@@ -81,6 +97,7 @@ def load_rules() -> Dict[str, Any]:
             }
             for name, entry in data.get("unsupported_patterns", {}).items()
         },
+        "acronym_rules": acronym_rules,
     }
 
 
@@ -96,6 +113,7 @@ class RuleEngine:
         self.demographic_age_defaults = self.rules["demographic_age_defaults"]
         self.demographic_concept_patterns = self.rules["demographic_concept_patterns"]
         self.unsupported_patterns = self.rules["unsupported_patterns"]
+        self.acronym_rules = self.rules["acronym_rules"]
 
     def split_candidates(self, text: str) -> List[str]:
         pattern = "|".join(self.splitters)
@@ -258,6 +276,38 @@ class RuleEngine:
                 print(f"Negation term matched: '{term}' in '{text}'")
                 return True
         return False
+
+    def build_acronym_index(self, concepts: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+        rules = self.acronym_rules
+        if not rules.get("enabled", True):
+            return {}
+        min_len = int(rules.get("min_len", 2))
+        max_len = int(rules.get("max_len", 6))
+        token_min_len = int(rules.get("token_min_len", 2))
+        token_max_len = int(rules.get("token_max_len", 20))
+        stopwords = {w.lower() for w in rules.get("stopwords", [])}
+        index: Dict[str, List[str]] = {}
+
+        for concept in concepts:
+            name = concept.get("concept_name") or concept.get("description") or ""
+            if not name:
+                continue
+            tokens = re.findall(r"[A-Za-z0-9]+", name)
+            initials = []
+            for token in tokens:
+                lower = token.lower()
+                if lower in stopwords:
+                    continue
+                if not (token_min_len <= len(token) <= token_max_len):
+                    continue
+                initials.append(token[0].upper())
+            acronym = "".join(initials)
+            if not (min_len <= len(acronym) <= max_len):
+                continue
+            index.setdefault(acronym, [])
+            if name not in index[acronym]:
+                index[acronym].append(name)
+        return index
 
 
 DEFAULT_ENGINE = RuleEngine()

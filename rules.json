@@ -154,5 +154,12 @@
             "pattern": "\\b(aged|age|over|under)\\b|\\b\\d+\\s*[-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2212]\\s*\\d+\\b|\\b\\d+\\+\\b",
             "warning": "Age criteria may be ambiguous (current age vs age at diagnosis)."
         }
+    },
+    "acronym_rules": {
+        "min_len": 2,
+        "max_len": 6,
+        "token_min_len": 2,
+        "token_max_len": 20,
+        "stopwords": ["of", "and", "with", "the", "a", "an", "in", "on", "for", "to", "due", "stage"]
     }
 }

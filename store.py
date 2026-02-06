@@ -5,9 +5,15 @@ from fuzzy_concept_resolver import FuzzyConceptResolver
 
 
 class ResolverStore:
-    def __init__(self, loader: Callable[[], List[Dict[str, Any]]], ttl_seconds: int):
+    def __init__(
+        self,
+        loader: Callable[[], List[Dict[str, Any]]],
+        ttl_seconds: int,
+        postprocess: Optional[Callable[[FuzzyConceptResolver, List[Dict[str, Any]]], None]] = None,
+    ):
         self._loader = loader
         self._ttl = ttl_seconds
+        self._postprocess = postprocess
         self._lock = asyncio.Lock()
         self._refresh_task: Optional[asyncio.Task] = None
 
@@ -36,6 +42,12 @@ class ResolverStore:
             except Exception as exc:
                 print(f"[ResolverStore] Refresh failed: {exc}")
                 return
+
+            if self._postprocess:
+                try:
+                    self._postprocess(resolver, concepts)
+                except Exception as exc:
+                    print(f"[ResolverStore] Postprocess failed: {exc}")
 
             self._concepts = concepts
             self._resolver = resolver
