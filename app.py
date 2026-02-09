@@ -17,7 +17,7 @@ from store import ResolverStore
 # Load environment variables
 load_dotenv()
 
-STORE_REFRESH_TTL = os.getenv("STORE_REFRESH_TTL", 60)
+STORE_REFRESH_TTL = int(os.getenv("STORE_REFRESH_TTL", 60))
 
 # MySQL config
 DB_CONFIG = {
@@ -29,7 +29,7 @@ DB_CONFIG = {
 }
 
 VIEW_NAME = os.getenv("OMOP_VIEW", "distribution_concepts")
-DEFAULT_THRESHOLD = os.getenv("DEFAULT_THRESHOLD", 90)
+DEFAULT_THRESHOLD = int(os.getenv("DEFAULT_THRESHOLD", 90))
 
 
 # ------------------------------------------------------------
