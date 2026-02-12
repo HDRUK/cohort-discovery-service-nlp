@@ -96,6 +96,15 @@ class FuzzyConceptResolver:
         self.log_match_limit = int(os.getenv("LOG_RESOLVER_MATCH_LIMIT", 50))
         self.fuzzy_token_overlap = os.getenv("FUZZY_TOKEN_OVERLAP", "true").lower() in {"1", "true", "yes", "on"}
         self.fuzzy_token_min_score = int(os.getenv("FUZZY_TOKEN_MIN_SCORE", 85))
+        self.max_matches = None
+        raw_max_matches = int(os.getenv("RESOLVER_MAX_MATCHES", 5))
+        if raw_max_matches:
+            try:
+                parsed_max = int(raw_max_matches)
+                if parsed_max > 0:
+                    self.max_matches = parsed_max
+            except ValueError:
+                print(f"[FuzzyConceptResolver] Invalid RESOLVER_MAX_MATCHES='{raw_max_matches}', ignoring.")
 
         # Pre-tokenise each concept's name first, description second
         for c in self.concepts:
@@ -240,6 +249,8 @@ class FuzzyConceptResolver:
 
         # Sort by score descending
         results.sort(key=lambda x: x["match_score"], reverse=True)
+        if self.max_matches:
+            results = results[: self.max_matches]
         if self.log_matches and logged >= self.log_match_limit:
             print(f"Resolver concept logging truncated at {self.log_match_limit} concepts")
         return results
