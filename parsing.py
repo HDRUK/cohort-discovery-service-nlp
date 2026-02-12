@@ -7,6 +7,48 @@ from rules_engine import RuleEngine
 class QueryParser:
     def __init__(self, engine: RuleEngine):
         self.engine = engine
+        self._acronym_index = {}
+        self._acronym_cache_id = None
+
+    def _build_acronym_index(self, concepts: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+        return self.engine.build_acronym_index(concepts)
+
+    def _get_acronym_index(self, resolver: Any) -> Dict[str, List[str]]:
+        eager_index = getattr(resolver, "acronym_index", None)
+        if eager_index is not None:
+            return eager_index
+        concepts = getattr(resolver, "concepts", None)
+        if concepts is None:
+            return {}
+        cache_id = id(concepts)
+        if cache_id != self._acronym_cache_id:
+            self._acronym_index = self._build_acronym_index(concepts)
+            self._acronym_cache_id = cache_id
+        return self._acronym_index
+
+    def _expand_acronyms(self, text: str, resolver: Any) -> str:
+        rules = self.engine.acronym_rules
+        if not rules.get("enabled", True):
+            return text
+        min_len = int(rules.get("min_len", 2))
+        max_len = int(rules.get("max_len", 6))
+        index = self._get_acronym_index(resolver)
+        if not index:
+            return text
+        pattern = re.compile(rf"\b[A-Z][A-Z0-9]{{{min_len - 1},{max_len - 1}}}\b")
+
+        def replace(match: re.Match) -> str:
+            token = match.group(0)
+            candidates = index.get(token, [])
+            if len(candidates) == 1:
+                return candidates[0]
+            if candidates:
+                shortest = min(candidates, key=lambda name: (len(name.split()), len(name)))
+                if candidates.count(shortest) == 1:
+                    return shortest
+            return token
+
+        return pattern.sub(replace, text)
 
     def extract(self, query: str, threshold: float, phrase_first: bool, resolver: Any) -> Dict[str, Any]:
         candidates = self.engine.split_candidates(query)
@@ -23,6 +65,7 @@ class QueryParser:
 
         # Pre-pass: detect whether any candidate includes non-demographic content
         for candidate in candidates:
+            defaults_applied = False
             candidate_age_constraints, candidate_without_age = self.engine.extract_age_constraints(candidate, "entity")
             candidate_time_constraints, candidate_without_time = self.engine.extract_time_constraints(
                 candidate_without_age, "entity"
@@ -32,6 +75,7 @@ class QueryParser:
             )
             candidate_normalised = self.engine.apply_demographic_patterns(candidate_clean)
             candidate_normalised = self.engine.apply_mappings(candidate_normalised, "normalise", warnings)
+            candidate_normalised = self._expand_acronyms(candidate_normalised, resolver)
             candidate_normalised = self.engine.apply_mappings(candidate_normalised, "bmi", warnings)
             if self.engine.has_non_demographic_content(candidate_normalised):
                 has_event_candidate = True
@@ -48,11 +92,13 @@ class QueryParser:
             )
             candidate_normalised = self.engine.apply_demographic_patterns(candidate_clean)
             candidate_normalised = self.engine.apply_mappings(candidate_normalised, "normalise", warnings)
+            candidate_normalised = self._expand_acronyms(candidate_normalised, resolver)
             candidate_normalised = self.engine.apply_mappings(candidate_normalised, "bmi", warnings)
 
             if not candidate_age_constraints:
                 defaults = self.engine.find_demographic_age_default(candidate)
                 if defaults:
+                    defaults_applied = True
                     candidate_age_constraints.append(
                         {
                             "min": defaults.get("min"),
@@ -62,13 +108,14 @@ class QueryParser:
                         }
                     )
 
+            demographic_only_for_scope = not self.engine.has_non_demographic_content(candidate_normalised)
             demographic_only = (
-                not self.engine.has_non_demographic_content(candidate_normalised)
+                demographic_only_for_scope
                 and not self.engine.has_demographic_concept(candidate_normalised)
             )
 
             if candidate_age_constraints:
-                if demographic_only or not has_event_candidate:
+                if defaults_applied or demographic_only_for_scope or not has_event_candidate:
                     for constraint in candidate_age_constraints:
                         constraint["scope"] = "query"
                     query_age_constraints = self.engine.merge_age_constraints(
@@ -79,7 +126,7 @@ class QueryParser:
                 )
 
             if candidate_time_constraints:
-                if demographic_only or not has_event_candidate:
+                if demographic_only_for_scope or not has_event_candidate:
                     for constraint in candidate_time_constraints:
                         constraint["scope"] = "query"
                     query_time_constraints = self.engine.merge_time_constraints(
@@ -99,6 +146,7 @@ class QueryParser:
             )
             candidate_normalised = self.engine.apply_demographic_patterns(candidate_clean)
             candidate_normalised = self.engine.apply_mappings(candidate_normalised, "normalise", warnings)
+            candidate_normalised = self._expand_acronyms(candidate_normalised, resolver)
 
             # Negation
             negated = self.engine.is_negated(candidate)
