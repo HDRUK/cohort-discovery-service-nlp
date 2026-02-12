@@ -1,3 +1,9 @@
+## [1.2.0](https://github.com/HDRUK/project-daphne-nlp/compare/v1.1.0...v1.2.0) (2026-02-12)
+
+### ✨ Features
+
+* **DP-335:** #20 - A *VERY* experimental way of building acronym index layer from loaded concepts. ([ea72759](https://github.com/HDRUK/project-daphne-nlp/commit/ea72759d7817ce581c96b5d81b7fdf6857c3cf36)), closes [DP-335](DP-335)
+
 ## [1.1.0](https://github.com/HDRUK/project-daphne-nlp/compare/v1.0.0...v1.1.0) (2026-02-06)
 
 ### ✨ Features
