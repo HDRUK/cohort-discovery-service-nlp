@@ -100,7 +100,7 @@ class FuzzyConceptResolver:
         raw_max_matches = int(os.getenv("RESOLVER_MAX_MATCHES", 5))
         if raw_max_matches:
             try:
-                parsed_max = int(raw_max_matches)
+                parsed_max = raw_max_matches
                 if parsed_max > 0:
                     self.max_matches = parsed_max
             except ValueError:
