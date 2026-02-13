@@ -117,6 +117,38 @@ def test_fuzzy_token_overlap_handles_simple_misspelling(monkeypatch):
     finally:
         app.state.resolver_store = previous_store
 
+def test_resolver_max_matches_limit(monkeypatch):
+    monkeypatch.setenv("RESOLVER_MAX_MATCHES", "5")
+
+    previous_store = app.state.resolver_store
+    local_concepts = [
+        {
+            "concept_id": 100 + i,
+            "concept_name": f"Asthma variant {i}",
+            "description": f"Asthma variant {i}",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Clinical Finding",
+            "standard_concept": "S",
+        }
+        for i in range(1, 8)
+    ]
+
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+
+    try:
+        response = client.post(
+            "/extract?threshold=50",
+            json={"query": "asthma"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "entities" in body
+        assert len(body["entities"]) == 5
+    finally:
+        app.state.resolver_store = previous_store
+
 def test_women_over_50_with_diabetes_age_constraint():
     response = client.post(
         "/extract?threshold=70",
