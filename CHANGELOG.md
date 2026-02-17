@@ -1,3 +1,9 @@
+## [1.3.0](https://github.com/HDRUK/project-daphne-nlp/compare/v1.2.0...v1.3.0) (2026-02-17)
+
+### ✨ Features
+
+* **DP-377:** Sets configurable maximum number of returned candidates weighted by ratio scoring ([7961271](https://github.com/HDRUK/project-daphne-nlp/commit/796127181eb468e2e27af974ceda576000796645)), closes [DP-377](DP-377)
+
 ## [1.2.0](https://github.com/HDRUK/project-daphne-nlp/compare/v1.1.0...v1.2.0) (2026-02-12)
 
 ### ✨ Features
