@@ -3,7 +3,8 @@
   "version": "1.3.0",
   "private": true,
   "scripts": {
-    "semi": "npx semantic-release"
+    "semi": "npx semantic-release",
+    "lint:workflows": "actionlint"
   },
   "dependencies": {
     "@semantic-release/changelog": "^6.0.3",
