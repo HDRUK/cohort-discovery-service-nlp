@@ -1,3 +1,9 @@
+## [1.4.0](https://github.com/HDRUK/cohort-discovery-service-nlp/compare/v1.3.0...v1.4.0) (2026-02-23)
+
+### ✨ Features
+
+* **DP-459:** yml linting, contribution guide and pr_template ([f89f845](https://github.com/HDRUK/cohort-discovery-service-nlp/commit/f89f845f914e66b5ed6c4c6dc7eabebad7fa06f8)), closes [DP-459](DP-459)
+
 ## [1.3.0](https://github.com/HDRUK/project-daphne-nlp/compare/v1.2.0...v1.3.0) (2026-02-17)
 
 ### ✨ Features
