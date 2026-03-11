@@ -1,5 +1,5 @@
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from rules_engine import RuleEngine
 
@@ -26,6 +26,37 @@ class QueryParser:
             self._acronym_cache_id = cache_id
         return self._acronym_index
 
+    def _validate_paren_groups(self, query: str) -> Tuple[List[Tuple[int, int, str]], List[str]]:
+        """Returns (groups, warnings). groups is a list of (open_idx, close_idx, inner_text)."""
+        stack: List[int] = []
+        groups: List[Tuple[int, int, str]] = []
+
+        for i, ch in enumerate(query):
+            if ch == "(":
+                stack.append(i)
+            elif ch == ")":
+                if not stack:
+                    return [], ["Missing opening or closing parenthesis"]
+                open_idx = stack.pop()
+                groups.append((open_idx, i, query[open_idx + 1 : i]))
+
+        if stack:
+            return [], ["Missing opening or closing parenthesis"]
+
+        return groups, []
+
+    def _detect_group_operator(self, text: str) -> Optional[str]:
+        """Returns 'and', 'or', or None if both (mixed) or neither are present."""
+        has_and = bool(re.search(r"\band\b", text, re.IGNORECASE))
+        has_or = bool(re.search(r"\bor\b", text, re.IGNORECASE))
+        if has_and and has_or:
+            return None
+        if has_and:
+            return "and"
+        if has_or:
+            return "or"
+        return None
+
     def _expand_acronyms(self, text: str, resolver: Any) -> str:
         rules = self.engine.acronym_rules
         if not rules.get("enabled", True):
@@ -50,13 +81,37 @@ class QueryParser:
 
         return pattern.sub(replace, text)
 
-    def extract(self, query: str, threshold: float, phrase_first: bool, resolver: Any) -> Dict[str, Any]:
-        candidates = self.engine.split_candidates(query)
+    def extract(self, query: str, threshold: float, phrase_first: bool, resolver: Any, _skip_paren: bool = False) -> Dict[str, Any]:
+        paren_groups: List[Dict[str, Any]] = []
+        paren_warnings: List[str] = []
+        working_query = query
+
+        if not _skip_paren:
+            raw_groups, paren_warnings = self._validate_paren_groups(query)
+            if not paren_warnings:
+                for open_idx, close_idx, inner_text in raw_groups:
+                    operator = self._detect_group_operator(inner_text)
+                    if operator is None and re.search(r"\band\b|\bor\b", inner_text, re.IGNORECASE):
+                        paren_warnings.append("All operators within a group must be the same")
+                    group_result = self.extract(inner_text, threshold, phrase_first, resolver, _skip_paren=True)
+                    paren_groups.append({
+                        "text": inner_text.strip(),
+                        "operator": operator,
+                        "entities": group_result["entities"],
+                        "age_constraints": group_result["age_constraints"],
+                        "time_constraints": group_result["time_constraints"],
+                    })
+                # Strip parenthesised segments from the outer query (right-to-left to preserve indices)
+                for open_idx, close_idx, _ in reversed(raw_groups):
+                    working_query = working_query[:open_idx] + working_query[close_idx + 1:]
+                working_query = re.sub(r"\s+", " ", working_query).strip()
+
+        candidates = self.engine.split_candidates(working_query)
         entities: List[Dict[str, Any]] = []
         seen = set()
-        warnings: List[str] = []
-        global_age_constraints, _ = self.engine.extract_age_constraints(query, "query")
-        global_time_constraints, _ = self.engine.extract_time_constraints(query, "query")
+        warnings: List[str] = list(paren_warnings)
+        global_age_constraints, _ = self.engine.extract_age_constraints(working_query, "query")
+        global_time_constraints, _ = self.engine.extract_time_constraints(working_query, "query")
         query_age_constraints = list(global_age_constraints)
         query_time_constraints = list(global_time_constraints)
         entity_age_constraints_all: List[Dict[str, Any]] = []
@@ -207,7 +262,7 @@ class QueryParser:
 
             # Resolve concepts
             matches = resolver.resolve(candidate_normalised, threshold, phrase_first=phrase_first)
-            index = query.lower().find(candidate.lower())
+            index = working_query.lower().find(candidate.lower())
 
             for match in matches:
                 key = (match["concept_id"], candidate.lower(), index)
@@ -233,6 +288,7 @@ class QueryParser:
 
         return {
             "entities": entities,
+            "groups": paren_groups,
             "warnings": warnings,
             "age_constraints": query_age_constraints,
             "time_constraints": query_time_constraints,
