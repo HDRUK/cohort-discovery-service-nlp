@@ -72,12 +72,6 @@ def test_adults_type2_diabetes_last_2_years():
     # Age
     assert has_age_constraint(body, 24, None, False)
 
-    # Warnings
-    assert any(
-        "Age criteria may be ambiguous (current age vs age at diagnosis)." in warning
-        for warning in body.get("warnings", [])
-    )
-
 def test_fuzzy_token_overlap_handles_simple_misspelling(monkeypatch):
     monkeypatch.setenv("FUZZY_TOKEN_OVERLAP", "true")
     monkeypatch.setenv("FUZZY_TOKEN_MIN_SCORE", "90")

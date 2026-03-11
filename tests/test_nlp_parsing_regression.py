@@ -371,38 +371,6 @@ def test_occurrence_count_warning_for_multiple_courses_query():
         app.state.resolver_store = previous_store
 
 
-def test_age_ambiguity_warning_for_aged_query():
-    local_concepts = [
-        {
-            "concept_id": 313217,
-            "concept_name": "Atrial fibrillation",
-            "description": "Atrial fibrillation",
-            "domain_id": "Condition",
-            "vocabulary_id": "SNOMED",
-            "concept_class_id": "Disorder",
-            "standard_concept": "S",
-        },
-    ]
-
-    previous_store = app.state.resolver_store
-    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
-    try:
-        response = client.post(
-            "/extract?threshold=70",
-            json={"query": "People aged 40+ with atrial fibrillation"},
-        )
-
-        assert response.status_code == 200
-        body = response.json()
-        assert "warnings" in body
-        assert any(
-            "Age criteria may be ambiguous (current age vs age at diagnosis)." in warning
-            for warning in body["warnings"]
-        )
-    finally:
-        app.state.resolver_store = previous_store
-
-
 def test_stroke_with_last_five_years_time_constraint():
     local_concepts = [
         {

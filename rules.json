@@ -151,8 +151,7 @@
             "warning": "The ability to filter on multiple occurrences is not currently supported."
         },
         "age_ambiguity": {
-            "pattern": "\\b(aged|age|over|under)\\b|\\b\\d+\\s*[-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2212]\\s*\\d+\\b|\\b\\d+\\+\\b",
-            "warning": "Age criteria may be ambiguous (current age vs age at diagnosis)."
+            "pattern": "\\b(aged|age|over|under)\\b|\\b\\d+\\s*[-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2212]\\s*\\d+\\b|\\b\\d+\\+\\b"
         }
     },
     "acronym_rules": {
