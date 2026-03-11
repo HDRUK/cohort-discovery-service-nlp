@@ -139,8 +139,17 @@ class Entity(BaseModel):
     negated: bool = False
 
 
+class Group(BaseModel):
+    text: str
+    operator: Optional[str] = None
+    entities: List[Entity]
+    age_constraints: List[Dict[str, Any]] = []
+    time_constraints: List[Dict[str, Any]] = []
+
+
 class QueryResponse(BaseModel):
     entities: List[Entity]
+    groups: List[Group] = []
     warnings: List[str] = []
     age_constraints: List[Dict[str, Any]] = []
     time_constraints: List[Dict[str, Any]] = []
