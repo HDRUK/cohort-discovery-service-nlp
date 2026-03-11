@@ -51,6 +51,7 @@ def load_concepts_from_mysql():
         SELECT
             concept_id,
             concept_name,
+            concept_name as description,
             domain_id,
             vocabulary_id,
             concept_class,
