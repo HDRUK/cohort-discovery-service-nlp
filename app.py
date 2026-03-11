@@ -49,18 +49,19 @@ def load_concepts_from_mysql():
     cursor.execute(
         f"""
         SELECT
-            DISTINCT(concept_id),
+            concept_id,
             concept_name,
-            description,
             domain_id,
             vocabulary_id,
-            concept_class_id,
-            standard_concept
+            concept_class,
+            standard_concept,
+            concept_code,
+            count,
+            ncollections,
+            all_synthetic
         FROM {VIEW_NAME}
-        WHERE
-            concept_name IS NOT NULL
-            OR description IS NOT NULL;
-    """
+        WHERE concept_name IS NOT NULL;
+        """
     )
     query_time = time.time() - query_start
 
@@ -78,10 +79,10 @@ def load_concepts_from_mysql():
 
     # Print profiling information
     print("\n[Profiling] load_concepts_from_mysql")
-    print(f"  - Connection time: {conn_time*1000:.2f}ms")
-    print(f"  - Query execution time: {query_time*1000:.2f}ms")
-    print(f"  - Fetch time: {fetch_time*1000:.2f}ms")
-    print(f"  - Total time: {total_time*1000:.2f}ms")
+    print(f"  - Connection time: {conn_time * 1000:.2f}ms")
+    print(f"  - Query execution time: {query_time * 1000:.2f}ms")
+    print(f"  - Fetch time: {fetch_time * 1000:.2f}ms")
+    print(f"  - Total time: {total_time * 1000:.2f}ms")
     print(f"  - Concepts loaded: {len(concepts)}")
     print(f"  - Estimated memory: {concepts_size / 1024 / 1024:.2f}MB")
     print(f"  - TTL: {STORE_REFRESH_TTL}s\n")
@@ -176,7 +177,7 @@ async def extract_entities(
     ret_value = PARSER.extract(payload.query, threshold, phrase_first, resolver)
 
     print(f"[Request] query='{payload.query}' => entities={ret_value}")
-    
+
     return ret_value
 
 
