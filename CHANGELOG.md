@@ -1,3 +1,10 @@
+## [1.5.0](https://github.com/HDRUK/cohort-discovery-service-nlp/compare/v1.4.0...v1.5.0) (2026-03-19)
+
+### ✨ Features
+
+* **DP-562:** Re-instates ( ) as grouping mechanism to query parsing ([7be0548](https://github.com/HDRUK/cohort-discovery-service-nlp/commit/7be05486c5c0cbd06a86f2d28e77e5cb2b590fe3)), closes [DP-562](DP-562)
+* **DP-563:** Limit warnings within response ([ad04f2d](https://github.com/HDRUK/cohort-discovery-service-nlp/commit/ad04f2df379cd73ec13520af7ac9ec0d489a0dd9)), closes [DP-563](DP-563)
+
 ## [1.4.0](https://github.com/HDRUK/cohort-discovery-service-nlp/compare/v1.3.0...v1.4.0) (2026-02-23)
 
 ### ✨ Features
