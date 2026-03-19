@@ -1,4 +1,5 @@
 from rapidfuzz import fuzz
+import math
 import os
 import re
 
@@ -96,6 +97,7 @@ class FuzzyConceptResolver:
         self.log_match_limit = int(os.getenv("LOG_RESOLVER_MATCH_LIMIT", 50))
         self.fuzzy_token_overlap = os.getenv("FUZZY_TOKEN_OVERLAP", "true").lower() in {"1", "true", "yes", "on"}
         self.fuzzy_token_min_score = int(os.getenv("FUZZY_TOKEN_MIN_SCORE", 85))
+        self.collection_boost_weight = float(os.getenv("COLLECTION_BOOST_WEIGHT", 1.5))
         self.max_matches = None
         raw_max_matches = int(os.getenv("RESOLVER_MAX_MATCHES", 5))
         if raw_max_matches:
@@ -241,6 +243,11 @@ class FuzzyConceptResolver:
             # Penalise downstream / complication language
             downstream_hits = concept_tokens & DOWNSTREAM_TOKENS
             score -= len(downstream_hits) * self.extra_token_penalty
+
+            # Boost concepts that appear in multiple collections
+            ncollections = concept.get("ncollections") or 0
+            if ncollections > 1 and self.collection_boost_weight > 0:
+                score += math.log(ncollections) * self.collection_boost_weight
 
             if score >= threshold:
                 result = dict(concept)
