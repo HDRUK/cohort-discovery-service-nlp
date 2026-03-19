@@ -1,3 +1,9 @@
+## [1.6.0](https://github.com/HDRUK/cohort-discovery-service-nlp/compare/v1.5.0...v1.6.0) (2026-03-19)
+
+### ✨ Features
+
+* **DP-595:** Applies logarithmic weighting for concepts that feature in multiple collections ([14af962](https://github.com/HDRUK/cohort-discovery-service-nlp/commit/14af96243df364d0c5ddb7620ebcb61b53effdb1)), closes [DP-595](DP-595)
+
 ## [1.5.0](https://github.com/HDRUK/cohort-discovery-service-nlp/compare/v1.4.0...v1.5.0) (2026-03-19)
 
 ### ✨ Features
