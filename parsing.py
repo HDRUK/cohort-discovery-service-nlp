@@ -230,7 +230,11 @@ class QueryParser:
                     global_age_constraints, candidate_age_constraints
                 )
 
-            if entity_time_constraints_all:
+            is_gender_only = (
+                self.engine.has_demographic_concept(candidate_normalised)
+                and not self.engine.has_non_demographic_content(candidate_normalised)
+            )
+            if entity_time_constraints_all and not is_gender_only:
                 entity_time_constraints = entity_time_constraints_all
             else:
                 entity_time_constraints = self.engine.merge_time_constraints(
