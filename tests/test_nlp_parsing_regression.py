@@ -471,6 +471,68 @@ def test_acronym_expansion_for_ckd():
         app.state.resolver_store = previous_store
 
 
+def test_gender_does_not_inherit_time_constraint_from_disease():
+    """DP-732: time constraint from a disease clause must not leak onto a gender concept.
+
+    Query: "Women with asthma in the last 10 years"
+    Expected:
+      - FEMALE entity has NO time constraints
+      - Asthma entity carries the "last 10 years" time constraint
+    """
+    local_concepts = [
+        {
+            "concept_id": 8532,
+            "concept_name": "FEMALE",
+            "description": "FEMALE",
+            "domain_id": "Gender",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Gender",
+            "standard_concept": "S",
+        },
+        {
+            "concept_id": 317009,
+            "concept_name": "Asthma",
+            "description": "Asthma",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "Women with asthma in the last 10 years"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        entities = body["entities"]
+
+        # Both concepts must be resolved
+        descriptions = [e.get("attributes", {}).get("description", "").lower() for e in entities]
+        assert "female" in descriptions, "Expected FEMALE entity to be resolved"
+        assert "asthma" in descriptions, "Expected Asthma entity to be resolved"
+
+        # Happy path: FEMALE entity must have no time constraints
+        female_entities = [e for e in entities if e.get("attributes", {}).get("description", "").lower() == "female"]
+        for entity in female_entities:
+            assert entity.get("time_constraints", []) == [], (
+                f"FEMALE entity should have no time constraints, got: {entity.get('time_constraints')}"
+            )
+
+        # Sad path (regression check): Asthma entity must carry the time constraint
+        asthma_entities = [e for e in entities if e.get("attributes", {}).get("description", "").lower() == "asthma"]
+        assert any(
+            len(e.get("time_constraints", [])) > 0 for e in asthma_entities
+        ), "Asthma entity should have a time constraint for 'last 10 years'"
+    finally:
+        app.state.resolver_store = previous_store
+
+
 def test_acronym_expansion_disabled_via_env(monkeypatch):
     monkeypatch.setenv("ACRONYM_ENABLED", "false")
     importlib.reload(rules_engine)
