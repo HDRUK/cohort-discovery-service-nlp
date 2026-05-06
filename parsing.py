@@ -157,9 +157,11 @@ class QueryParser:
             candidate_time_constraints, candidate_without_time = (
                 self.engine.extract_time_constraints(candidate_without_age, "entity")
             )
-            candidate_clean = self.engine.strip_leading_verbs(
-                self.engine.clean_candidates(candidate_without_time)
+            candidate_clean = self.engine.clean_candidates(candidate_without_time)
+            candidate_clean = self.engine.strip_dangling_logical_operators(
+                candidate_clean
             )
+            candidate_clean = self.engine.strip_leading_verbs(candidate_clean)
             candidate_clean = self.engine.strip_dangling_logical_operators(
                 candidate_clean
             )
@@ -185,9 +187,11 @@ class QueryParser:
             candidate_time_constraints, candidate_without_time = (
                 self.engine.extract_time_constraints(candidate_without_age, "entity")
             )
-            candidate_clean = self.engine.strip_leading_verbs(
-                self.engine.clean_candidates(candidate_without_time)
+            candidate_clean = self.engine.clean_candidates(candidate_without_time)
+            candidate_clean = self.engine.strip_dangling_logical_operators(
+                candidate_clean
             )
+            candidate_clean = self.engine.strip_leading_verbs(candidate_clean)
             candidate_clean = self.engine.strip_dangling_logical_operators(
                 candidate_clean
             )
@@ -256,9 +260,12 @@ class QueryParser:
             candidate_time_constraints, candidate_without_time = (
                 self.engine.extract_time_constraints(candidate_without_age, "entity")
             )
-            candidate_clean = self.engine.strip_leading_verbs(
-                self.engine.clean_candidates(candidate_without_time)
+            candidate_clean = self.engine.clean_candidates(candidate_without_time)
+
+            candidate_clean = self.engine.strip_dangling_logical_operators(
+                candidate_clean
             )
+            candidate_clean = self.engine.strip_leading_verbs(candidate_clean)
             candidate_clean = self.engine.strip_dangling_logical_operators(
                 candidate_clean
             )

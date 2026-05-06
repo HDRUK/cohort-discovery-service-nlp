@@ -4,7 +4,7 @@
     ",\\s+",
     "\\sand\\s",
     "\\sor\\s",
-    "\\swith\\s",
+    "(?<!diagnosed)(?<!treated)(?<!vaccinated)\\swith\\s",
     "\\swho have\\s",
     "\\swho has\\s",
     "\\swho received\\s",
