@@ -387,7 +387,7 @@ def test_adults_with_diabetes_diagnosed_last_two_years_time_constraint():
         assert any(
             e.get("time_constraints")
             and e["time_constraints"][0]["from"]
-            and e["time_constraints"][0]["to"]
+            and e["time_constraints"][0]["to"] is None
             and e["time_constraints"][0]["scope"] in {"query", "entity"}
             for e in body["entities"]
         )
