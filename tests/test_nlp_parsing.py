@@ -27,6 +27,7 @@ app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(concepts))
 
 client = TestClient(app)
 
+
 def has_age_constraint(body, min_age, max_age, inclusive, scope=None):
     constraints = list(body.get("age_constraints", []))
     for entity in body.get("entities", []):
@@ -41,6 +42,7 @@ def has_age_constraint(body, min_age, max_age, inclusive, scope=None):
         ):
             return True
     return False
+
 
 def test_adults_type2_diabetes_last_2_years():
     response = client.post(
@@ -71,6 +73,7 @@ def test_adults_type2_diabetes_last_2_years():
 
     # Age
     assert has_age_constraint(body, 24, None, False)
+
 
 def test_fuzzy_token_overlap_handles_simple_misspelling(monkeypatch):
     monkeypatch.setenv("FUZZY_TOKEN_OVERLAP", "true")
@@ -111,6 +114,7 @@ def test_fuzzy_token_overlap_handles_simple_misspelling(monkeypatch):
     finally:
         app.state.resolver_store = previous_store
 
+
 def test_resolver_max_matches_limit(monkeypatch):
     monkeypatch.setenv("RESOLVER_MAX_MATCHES", "5")
 
@@ -143,6 +147,7 @@ def test_resolver_max_matches_limit(monkeypatch):
     finally:
         app.state.resolver_store = previous_store
 
+
 def test_women_over_50_with_diabetes_age_constraint():
     response = client.post(
         "/extract?threshold=70",
@@ -156,6 +161,7 @@ def test_women_over_50_with_diabetes_age_constraint():
     assert len(body["entities"]) >= 1
 
     assert has_age_constraint(body, 50, None, False)
+
 
 def test_women_under_60_hip_fracture_entity_age_constraint():
     local_concepts = [
@@ -202,6 +208,7 @@ def test_women_under_60_hip_fracture_entity_age_constraint():
 
     assert has_age_constraint(body, None, 60, False, scope="query")
 
+
 def test_adults_aged_18_30_with_diagnosis_of_asthma():
     local_concepts = [
         {
@@ -236,6 +243,7 @@ def test_adults_aged_18_30_with_diagnosis_of_asthma():
         assert has_age_constraint(body, 18, 30, True, scope="query")
     finally:
         app.state.resolver_store = previous_store
+
 
 def test_people_aged_65_plus_with_diagnosed_hypertension():
     local_concepts = [
@@ -308,6 +316,7 @@ def test_people_aged_65_plus_age_constraint_cleaned():
     finally:
         app.state.resolver_store = previous_store
 
+
 def test_people_with_chronic_kidney_disease_stage_3_5():
     local_concepts = [
         {
@@ -370,14 +379,15 @@ def test_adults_with_diabetes_diagnosed_last_two_years_time_constraint():
         assert len(body["entities"]) >= 1
 
         assert any(
-            e.get("attributes", {}).get("description", "").lower() == "type 2 diabetes mellitus"
+            e.get("attributes", {}).get("description", "").lower()
+            == "type 2 diabetes mellitus"
             for e in body["entities"]
         )
 
         assert any(
             e.get("time_constraints")
             and e["time_constraints"][0]["from"]
-            and e["time_constraints"][0]["to"]
+            and e["time_constraints"][0]["to"] is None
             and e["time_constraints"][0]["scope"] in {"query", "entity"}
             for e in body["entities"]
         )
@@ -412,7 +422,8 @@ def test_adults_with_diabetes_does_not_create_demographic_entity():
         assert len(body["entities"]) >= 1
 
         assert any(
-            e.get("attributes", {}).get("description", "").lower() == "type 2 diabetes mellitus"
+            e.get("attributes", {}).get("description", "").lower()
+            == "type 2 diabetes mellitus"
             for e in body["entities"]
         )
 
@@ -489,5 +500,59 @@ def test_elderly_with_heart_failure_default_age_constraint():
         )
 
         assert has_age_constraint(body, 65, None, True, scope="query")
+    finally:
+        app.state.resolver_store = previous_store
+
+
+def test_unmatched_candidate_is_preserved_with_warning():
+    local_concepts = [
+        {
+            "concept_id": 36684857,
+            "concept_name": "Cancer",
+            "description": "Cancer",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class_id": "Disorder",
+            "standard_concept": "S",
+        },
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "adults with cancer and ashfuasfhoa"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+
+        assert any(
+            e.get("attributes", {}).get("description", "").lower() == "cancer"
+            for e in body["entities"]
+        )
+
+        unmatched = [
+            e
+            for e in body["entities"]
+            if e.get("attributes", {}).get("concept_id") is None
+        ]
+
+        assert len(unmatched) == 1
+        assert unmatched[0]["text"] == "ashfuasfhoa"
+        assert unmatched[0]["label"] is None
+        assert unmatched[0]["attributes"]["concept_id"] is None
+        assert unmatched[0]["attributes"]["concept_name"] == "ashfuasfhoa"
+        assert unmatched[0]["attributes"]["description"] == "ashfuasfhoa"
+        assert unmatched[0]["attributes"]["unmatched"] is True
+
+        assert any(
+            'We cannot find any matching concepts for your term "ashfuasfhoa".'
+            in warning
+            for warning in body["warnings"]
+        )
+
     finally:
         app.state.resolver_store = previous_store
