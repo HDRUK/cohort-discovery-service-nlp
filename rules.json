@@ -31,6 +31,8 @@
     "^vaccinated\\s+with\\s+",
     "^vaccination\\s+with\\s+",
     "^(suffered|had|experienced)\\s+",
+    "^been\\s+diagnosed\\s+with\\s+",
+    "^been\\s+diagnosed\\s+",
     "^diagnosed\\s+with\\s+",
     "^diagnosed\\s+",
     "^(diagnosed|diagnosis)\\s+in\\s+the\\s+",
