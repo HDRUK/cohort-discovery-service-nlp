@@ -188,6 +188,8 @@ async def extract_entities(
 
     print(f"[Request] query='{payload.query}' => entities={ret_value}")
 
+    print([x["text"] for x in ret_value["entities"]])
+
     return ret_value
 
 

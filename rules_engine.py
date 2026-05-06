@@ -61,13 +61,21 @@ def load_rules() -> Dict[str, Any]:
     )
     env_enabled = os.getenv("ACRONYM_ENABLED")
     if env_enabled is not None:
-        acronym_rules["enabled"] = env_enabled.strip().lower() in {"1", "true", "yes", "on"}
+        acronym_rules["enabled"] = env_enabled.strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
     else:
         acronym_rules["enabled"] = True
 
     return {
+        "logical_operators": data.get("logical_operators", ["and", "or"]),
         "splitters": data.get("splitters", []),
-        "leading_verbs": [re.compile(p, re.IGNORECASE) for p in data.get("leading_verbs", [])],
+        "leading_verbs": [
+            re.compile(p, re.IGNORECASE) for p in data.get("leading_verbs", [])
+        ],
         "age_patterns": [
             (re.compile(entry["pattern"], re.IGNORECASE), entry["op"])
             for entry in data.get("age_patterns", [])
@@ -102,7 +110,11 @@ def load_rules() -> Dict[str, Any]:
 
 
 class RuleEngine:
-    def __init__(self, mappings: Optional[Dict[str, Any]] = None, rules: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        mappings: Optional[Dict[str, Any]] = None,
+        rules: Optional[Dict[str, Any]] = None,
+    ):
         self.mappings = mappings or load_mappings()
         self.rules = rules or load_rules()
         self.splitters = self.rules["splitters"]
@@ -114,12 +126,44 @@ class RuleEngine:
         self.demographic_concept_patterns = self.rules["demographic_concept_patterns"]
         self.unsupported_patterns = self.rules["unsupported_patterns"]
         self.acronym_rules = self.rules["acronym_rules"]
+        self.logical_operators = self.rules["logical_operators"]
 
     def split_candidates(self, text: str) -> List[str]:
         pattern = "|".join(self.splitters)
-        candidates = [s.strip() for s in re.split(pattern, text, flags=re.IGNORECASE) if s.strip()]
+        candidates = [
+            s.strip() for s in re.split(pattern, text, flags=re.IGNORECASE) if s.strip()
+        ]
         print(f"found candidates {candidates}")
         return candidates
+
+    def strip_dangling_logical_operators(self, text: str) -> str:
+        text = text.strip()
+
+        operators = [
+            re.escape(op)
+            for op in self.logical_operators
+            if isinstance(op, str) and op.strip()
+        ]
+
+        if not operators:
+            return text
+
+        operator_pattern = "|".join(operators)
+
+        text = re.sub(
+            rf"^(?:{operator_pattern})\s+",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            rf"\s+(?:{operator_pattern})$",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        return text.strip()
 
     def clean_candidates(self, text: str) -> str:
         punctuation = string.punctuation.replace("-", "")
@@ -133,7 +177,9 @@ class RuleEngine:
             text = pattern.sub("", text)
         return text.strip()
 
-    def apply_mappings(self, text: str, group: str, warnings: Optional[List[str]] = None) -> str:
+    def apply_mappings(
+        self, text: str, group: str, warnings: Optional[List[str]] = None
+    ) -> str:
         for entry in self.mappings.get(group, []):
             if entry["contains"]:
                 haystack = text.lower()
@@ -148,7 +194,9 @@ class RuleEngine:
     def apply_demographic_patterns(self, text: str) -> str:
         return self.apply_mappings(text, "demographic")
 
-    def extract_age_constraints(self, text: str, scope: str) -> Tuple[List[Dict[str, Any]], str]:
+    def extract_age_constraints(
+        self, text: str, scope: str
+    ) -> Tuple[List[Dict[str, Any]], str]:
         constraints = []
         cleaned = text
 
@@ -168,25 +216,50 @@ class RuleEngine:
             for m in pattern.finditer(cleaned):
                 if op == "<":
                     max_age = int(m.group(1))
-                    constraints.append({"min": None, "max": max_age, "inclusive": False, "scope": scope})
+                    constraints.append(
+                        {
+                            "min": None,
+                            "max": max_age,
+                            "inclusive": False,
+                            "scope": scope,
+                        }
+                    )
                 elif op == ">":
                     min_age = int(m.group(1))
-                    constraints.append({"min": min_age, "max": None, "inclusive": False, "scope": scope})
+                    constraints.append(
+                        {
+                            "min": min_age,
+                            "max": None,
+                            "inclusive": False,
+                            "scope": scope,
+                        }
+                    )
                 elif op == ">=":
                     min_age = int(m.group(1))
-                    constraints.append({"min": min_age, "max": None, "inclusive": True, "scope": scope})
+                    constraints.append(
+                        {"min": min_age, "max": None, "inclusive": True, "scope": scope}
+                    )
                 elif op == "range":
                     min_age = int(m.group(1))
                     max_age = int(m.group(2))
                     if min_age > max_age:
                         min_age, max_age = max_age, min_age
-                    constraints.append({"min": min_age, "max": max_age, "inclusive": True, "scope": scope})
+                    constraints.append(
+                        {
+                            "min": min_age,
+                            "max": max_age,
+                            "inclusive": True,
+                            "scope": scope,
+                        }
+                    )
 
             cleaned = pattern.sub("", cleaned)
 
         return constraints, cleaned.strip()
 
-    def extract_time_constraints(self, text: str, scope: str) -> Tuple[List[Dict[str, Any]], str]:
+    def extract_time_constraints(
+        self, text: str, scope: str
+    ) -> Tuple[List[Dict[str, Any]], str]:
         constraints = []
         cleaned = text
 
@@ -196,13 +269,22 @@ class RuleEngine:
                     value = int(m.group(1))
                     unit = m.group(2).lower()
                     now = datetime.utcnow()
+
                     if unit.startswith("year"):
                         start = now - timedelta(days=value * 365)
                     elif unit.startswith("month"):
                         start = now - timedelta(days=value * 30)
                     else:
                         start = now
-                    constraints.append({"from": start.isoformat(), "to": now.isoformat(), "scope": scope})
+
+                    constraints.append(
+                        {
+                            "from": start.isoformat(),
+                            "to": None,
+                            "scope": scope,
+                        }
+                    )
+
             cleaned = pattern.sub("", cleaned)
 
         return constraints, cleaned.strip()
@@ -213,7 +295,12 @@ class RuleEngine:
         merged: List[Dict[str, Any]] = []
         seen = set()
         for entry in primary + secondary:
-            key = (entry.get("min"), entry.get("max"), entry.get("inclusive"), entry.get("scope"))
+            key = (
+                entry.get("min"),
+                entry.get("max"),
+                entry.get("inclusive"),
+                entry.get("scope"),
+            )
             if key in seen:
                 continue
             seen.add(key)
@@ -253,7 +340,9 @@ class RuleEngine:
         return None
 
     def has_demographic_concept(self, text: str) -> bool:
-        return any(pattern.search(text) for pattern in self.demographic_concept_patterns)
+        return any(
+            pattern.search(text) for pattern in self.demographic_concept_patterns
+        )
 
     def find_unsupported_features(self, text: str) -> List[str]:
         return [
@@ -277,7 +366,9 @@ class RuleEngine:
                 return True
         return False
 
-    def build_acronym_index(self, concepts: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+    def build_acronym_index(
+        self, concepts: List[Dict[str, Any]]
+    ) -> Dict[str, List[str]]:
         rules = self.acronym_rules
         if not rules.get("enabled", True):
             return {}
