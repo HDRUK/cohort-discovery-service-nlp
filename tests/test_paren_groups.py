@@ -21,6 +21,16 @@ except AttributeError:
 
 PAREN_CONCEPTS = [
     {
+        "concept_id": 8507,
+        "concept_name": "Male",
+        "description": "Male",
+        "domain_id": "Gender",
+        "vocabulary_id": "Gender",
+        "concept_class_id": "Gender",
+        "standard_concept": "S",
+        "concept_code": "M",
+    },
+    {
         "concept_id": 255573,
         "concept_name": "Chronic obstructive pulmonary disease",
         "description": "Chronic obstructive pulmonary disease",
@@ -81,12 +91,22 @@ def test_valid_and_group_returns_group_with_and_operator():
         )
         assert response.status_code == 200
         body = response.json()
+
         assert "groups" in body
         assert len(body["groups"]) == 1
+
         group = body["groups"][0]
+        assert group["text"] == "COPD and asthma"
         assert group["operator"] == "and"
-        assert len(group["entities"]) >= 1
         assert not body["warnings"]
+        assert body["entities"] == []
+
+        group_descriptions = {
+            e["attributes"].get("description", "").lower() for e in group["entities"]
+        }
+
+        assert "chronic obstructive pulmonary disease" in group_descriptions
+        assert "asthma" in group_descriptions
     finally:
         app.state.resolver_store = previous_store
 
@@ -101,11 +121,20 @@ def test_valid_or_group_returns_group_with_or_operator():
         )
         assert response.status_code == 200
         body = response.json()
+
         assert "groups" in body
         assert len(body["groups"]) == 1
+
         group = body["groups"][0]
         assert group["operator"] == "or"
         assert not body["warnings"]
+
+        group_descriptions = {
+            e["attributes"].get("description", "").lower() for e in group["entities"]
+        }
+
+        assert "chronic obstructive pulmonary disease" in group_descriptions
+        assert "asthma" in group_descriptions
     finally:
         app.state.resolver_store = previous_store
 
@@ -120,8 +149,19 @@ def test_group_text_matches_parenthesised_content():
         )
         assert response.status_code == 200
         body = response.json()
+
         assert len(body["groups"]) == 1
-        assert body["groups"][0]["text"] == "COPD or asthma"
+
+        group = body["groups"][0]
+        assert group["text"] == "COPD or asthma"
+        assert group["operator"] == "or"
+
+        group_descriptions = {
+            e["attributes"].get("description", "").lower() for e in group["entities"]
+        }
+
+        assert "chronic obstructive pulmonary disease" in group_descriptions
+        assert "asthma" in group_descriptions
     finally:
         app.state.resolver_store = previous_store
 
@@ -156,6 +196,50 @@ def test_group_entities_are_separate_from_outer_entities():
         app.state.resolver_store = previous_store
 
 
+def test_men_with_condition_group_combined_with_outer_or_entity():
+    """A parenthesised demographic + condition group can be combined with an outer OR entity."""
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(PAREN_CONCEPTS))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "(men with COPD) or asthma"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+
+        assert not body["warnings"]
+
+        assert len(body["groups"]) == 1
+        group = body["groups"][0]
+
+        assert group["text"] == "men with COPD"
+
+        assert group["operator"] is None
+
+        group_descriptions = {
+            e["attributes"].get("description", "").lower() for e in group["entities"]
+        }
+
+        assert "male" in group_descriptions
+        assert "chronic obstructive pulmonary disease" in group_descriptions
+        assert "asthma" not in group_descriptions
+
+        outer_descriptions = {
+            e["attributes"].get("description", "").lower() for e in body["entities"]
+        }
+
+        assert "asthma" in outer_descriptions
+        assert "male" not in outer_descriptions
+        assert "chronic obstructive pulmonary disease" not in outer_descriptions
+
+        outer_texts = {e["text"].lower() for e in body["entities"]}
+        assert "asthma" in outer_texts
+        assert "or asthma" not in outer_texts
+    finally:
+        app.state.resolver_store = previous_store
+
+
 def test_group_with_single_concept_has_no_operator():
     """A group containing a single concept with no logical connectors returns operator=None."""
     previous_store = app.state.resolver_store
@@ -167,10 +251,19 @@ def test_group_with_single_concept_has_no_operator():
         )
         assert response.status_code == 200
         body = response.json()
+
         assert len(body["groups"]) == 1
-        assert body["groups"][0]["operator"] is None
-        assert len(body["groups"][0]["entities"]) >= 1
+
+        group = body["groups"][0]
+        assert group["text"] == "COPD"
+        assert group["operator"] is None
         assert not body["warnings"]
+
+        group_descriptions = {
+            e["attributes"].get("description", "").lower() for e in group["entities"]
+        }
+
+        assert "chronic obstructive pulmonary disease" in group_descriptions
     finally:
         app.state.resolver_store = previous_store
 
@@ -186,11 +279,20 @@ def test_group_age_constraints_captured_within_group():
         )
         assert response.status_code == 200
         body = response.json()
+
         assert len(body["groups"]) == 1
+
         group = body["groups"][0]
-        assert any(
-            c.get("min") == 50 for c in group["age_constraints"]
-        )
+        assert group["text"] == "COPD over the age of 50"
+        assert group["operator"] is None
+
+        assert any(c.get("min") == 50 for c in group["age_constraints"])
+
+        group_descriptions = {
+            e["attributes"].get("description", "").lower() for e in group["entities"]
+        }
+
+        assert "chronic obstructive pulmonary disease" in group_descriptions
     finally:
         app.state.resolver_store = previous_store
 
@@ -200,26 +302,44 @@ def test_group_age_constraints_captured_within_group():
 # ---------------------------------------------------------------------------
 
 
-def test_mixed_operators_in_group_returns_warning_and_group():
-    """Mixed and/or operators in a group trigger a warning; the group is still returned."""
+def test_or_group_combined_with_outer_and_entity():
     previous_store = app.state.resolver_store
     app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(PAREN_CONCEPTS))
     try:
         response = client.post(
             "/extract?threshold=70",
-            json={"query": "Adults (COPD or asthma and type 2 diabetes mellitus)"},
+            json={"query": "(COPD or asthma) and type 2 diabetes mellitus"},
         )
         assert response.status_code == 200
         body = response.json()
 
-        assert any(
-            "All operators within a group must be the same" in w
-            for w in body["warnings"]
-        )
-        # Group still returned with entities despite invalid operator mix
+        assert not body["warnings"]
+
         assert len(body["groups"]) == 1
-        assert body["groups"][0]["operator"] is None
-        assert len(body["groups"][0]["entities"]) >= 1
+        group = body["groups"][0]
+
+        assert group["text"] == "COPD or asthma"
+        assert group["operator"] == "or"
+
+        group_descriptions = {
+            e["attributes"].get("description", "").lower() for e in group["entities"]
+        }
+
+        assert "chronic obstructive pulmonary disease" in group_descriptions
+        assert "asthma" in group_descriptions
+        assert "type 2 diabetes mellitus" not in group_descriptions
+
+        outer_descriptions = {
+            e["attributes"].get("description", "").lower() for e in body["entities"]
+        }
+
+        assert "type 2 diabetes mellitus" in outer_descriptions
+        assert "chronic obstructive pulmonary disease" not in outer_descriptions
+        assert "asthma" not in outer_descriptions
+
+        outer_texts = {e["text"].lower() for e in body["entities"]}
+        assert "type 2 diabetes mellitus" in outer_texts
+        assert "and type 2 diabetes mellitus" not in outer_texts
     finally:
         app.state.resolver_store = previous_store
 
@@ -237,8 +357,7 @@ def test_missing_closing_parenthesis_returns_warning_with_entities():
         body = response.json()
 
         assert any(
-            "Missing opening or closing parenthesis" in w
-            for w in body["warnings"]
+            "Missing opening or closing parenthesis" in w for w in body["warnings"]
         )
         # No groups when parens are invalid
         assert body["groups"] == []
@@ -265,8 +384,7 @@ def test_missing_opening_parenthesis_returns_warning_with_entities():
         body = response.json()
 
         assert any(
-            "Missing opening or closing parenthesis" in w
-            for w in body["warnings"]
+            "Missing opening or closing parenthesis" in w for w in body["warnings"]
         )
         assert body["groups"] == []
         assert any(
