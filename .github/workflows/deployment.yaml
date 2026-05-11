@@ -52,6 +52,7 @@ jobs:
         id: deploy
         env:
           PROJECT_ID: ${{ secrets.PROJECT_ID }}
+          PROD_PROJECT_ID: ${{ secrets.PROD_PROJECT_ID }}
           GAR_LOCATION: ${{ secrets.GAR_LOCATION }}
           GAR_NAME: ${{ secrets.GAR_NAME }}
           SERVICE_NAME: "${{ secrets.SERVICE_NAME }}"
