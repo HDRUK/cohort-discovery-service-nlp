@@ -114,7 +114,7 @@ class FuzzyConceptResolver:
             c["tokens"] = unigrams
             c["phrase_tokens"] = phrases
 
-    def resolve(self, text, threshold=None, phrase_first=None):
+    def resolve(self, text, threshold=None, phrase_first=None, max_matches=None):
         """
         Fuzzy match input text against concepts and return ranked matches.
         
@@ -194,6 +194,8 @@ class FuzzyConceptResolver:
                 score -= (len(extra_tokens) / max(len(candidate_unigrams), 1)) * self.extra_token_penalty
                 downstream_hits = concept_tokens & DOWNSTREAM_TOKENS
                 score -= len(downstream_hits) * self.extra_token_penalty
+                name_closeness = fuzz.ratio(candidate_norm, concept_norm)
+                score += (name_closeness / 100) * 10
 
                 token_ok = token_ratio >= self.token_match_ratio
                 raw_ok = raw_score >= threshold
@@ -244,6 +246,13 @@ class FuzzyConceptResolver:
             downstream_hits = concept_tokens & DOWNSTREAM_TOKENS
             score -= len(downstream_hits) * self.extra_token_penalty
 
+            # Prefer concepts whose names closely match the query text.
+            # Uses direct string similarity (not WRatio) so "cancer" scores much
+            # higher against "cancer" than against "cancer education" — mirroring
+            # the API's exact > prefix > contains relevance ranking.
+            name_closeness = fuzz.ratio(candidate_norm, concept_norm)
+            score += (name_closeness / 100) * 10
+
             # Boost concepts that appear in multiple collections
             ncollections = concept.get("ncollections") or 0
             if ncollections > 1 and self.collection_boost_weight > 0:
@@ -256,8 +265,9 @@ class FuzzyConceptResolver:
 
         # Sort by score descending
         results.sort(key=lambda x: x["match_score"], reverse=True)
-        if self.max_matches:
-            results = results[: self.max_matches]
+        effective_max = max_matches if max_matches is not None else self.max_matches
+        if effective_max:
+            results = results[:effective_max]
         if self.log_matches and logged >= self.log_match_limit:
             print(f"Resolver concept logging truncated at {self.log_match_limit} concepts")
         return results

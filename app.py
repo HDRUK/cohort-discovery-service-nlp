@@ -187,13 +187,16 @@ async def extract_entities(
     phrase_first: bool = Query(
         True, description="Prefer phrase overlap when token matching is available"
     ),
+    max_matches: Optional[int] = Query(
+        None, ge=1, description="Max concept matches per entity (defaults to RESOLVER_MAX_MATCHES)"
+    ),
     store: ResolverStore = Depends(get_resolver_store),
 ):
     """
     Extract clinical concepts from query using fuzzy matching.
     """
     resolver = await store.get_resolver()
-    ret_value = PARSER.extract(payload.query, threshold, phrase_first, resolver)
+    ret_value = PARSER.extract(payload.query, threshold, phrase_first, resolver, max_matches=max_matches)
 
     print(f"[Request] query='{payload.query}' => entities={ret_value}")
 

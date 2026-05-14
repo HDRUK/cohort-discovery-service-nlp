@@ -129,6 +129,7 @@ class QueryParser:
         phrase_first: bool,
         resolver: Any,
         _skip_paren: bool = False,
+        max_matches: Optional[int] = None,
     ) -> Dict[str, Any]:
         paren_groups: List[Dict[str, Any]] = []
         paren_warnings: List[str] = []
@@ -145,7 +146,7 @@ class QueryParser:
                 all_time_constraints: List[Dict[str, Any]] = []
 
                 for segment in or_segments:
-                    seg_result = self.extract(segment, threshold, phrase_first, resolver)
+                    seg_result = self.extract(segment, threshold, phrase_first, resolver, max_matches=max_matches)
                     all_entities.extend(seg_result["entities"])
                     all_groups.extend(seg_result.get("groups", []))
                     all_warnings.extend(seg_result["warnings"])
@@ -196,7 +197,7 @@ class QueryParser:
                             "All operators within a group must be the same"
                         )
                     group_result = self.extract(
-                        inner_text, threshold, phrase_first, resolver, _skip_paren=True
+                        inner_text, threshold, phrase_first, resolver, _skip_paren=True, max_matches=max_matches
                     )
                     paren_groups.append(
                         {
@@ -242,6 +243,7 @@ class QueryParser:
             candidate_time_constraints, candidate_without_time = (
                 self.engine.extract_time_constraints(candidate_without_age, "entity")
             )
+            candidate_without_time = self.engine.strip_demographic_age_prefix(candidate_without_time)
             candidate_clean = self.engine.clean_candidates(candidate_without_time)
             candidate_clean = self.engine.strip_dangling_logical_operators(
                 candidate_clean
@@ -272,6 +274,7 @@ class QueryParser:
             candidate_time_constraints, candidate_without_time = (
                 self.engine.extract_time_constraints(candidate_without_age, "entity")
             )
+            candidate_without_time = self.engine.strip_demographic_age_prefix(candidate_without_time)
             candidate_clean = self.engine.clean_candidates(candidate_without_time)
             candidate_clean = self.engine.strip_dangling_logical_operators(
                 candidate_clean
@@ -345,6 +348,7 @@ class QueryParser:
             candidate_time_constraints, candidate_without_time = (
                 self.engine.extract_time_constraints(candidate_without_age, "entity")
             )
+            candidate_without_time = self.engine.strip_demographic_age_prefix(candidate_without_time)
             candidate_clean = self.engine.clean_candidates(candidate_without_time)
 
             candidate_clean = self.engine.strip_dangling_logical_operators(
@@ -423,7 +427,7 @@ class QueryParser:
 
             # Resolve concepts
             matches = resolver.resolve(
-                candidate_normalised, threshold, phrase_first=phrase_first
+                candidate_normalised, threshold, phrase_first=phrase_first, max_matches=max_matches
             )
             index = working_query.lower().find(candidate.lower())
 

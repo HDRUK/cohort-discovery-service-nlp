@@ -9,6 +9,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 NEGATION_TERMS = {"no", "not", "without", "never"}
 
+WORD_TO_INT = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12,
+}
+
 
 def load_mappings() -> Dict[str, Any]:
     mappings_path = os.getenv("MAPPINGS_PATH", "mappings.json")
@@ -266,7 +272,8 @@ class RuleEngine:
         for pattern, op in self.time_patterns:
             for m in pattern.finditer(cleaned):
                 if op == "last":
-                    value = int(m.group(1))
+                    value_str = m.group(1)
+                    value = int(value_str) if value_str.isdigit() else WORD_TO_INT.get(value_str.lower(), 0)
                     unit = m.group(2).lower()
                     now = datetime.utcnow()
 
@@ -319,6 +326,11 @@ class RuleEngine:
             seen.add(key)
             merged.append(entry)
         return merged
+
+    def strip_demographic_age_prefix(self, text: str) -> str:
+        for term in self.demographic_age_defaults.keys():
+            text = re.sub(rf"^{re.escape(term)}s?\s+", "", text, flags=re.IGNORECASE)
+        return text.strip()
 
     def has_non_demographic_content(self, text: str) -> bool:
         text = re.sub(r"\b(MALE|FEMALE|CHILD)\b", "", text, flags=re.IGNORECASE)
