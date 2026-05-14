@@ -148,9 +148,18 @@ class Group(BaseModel):
     time_constraints: List[Dict[str, Any]] = []
 
 
+class RootGroup(BaseModel):
+    entities: List[Entity] = []
+    groups: List[Group] = []
+    age_constraints: List[Dict[str, Any]] = []
+    time_constraints: List[Dict[str, Any]] = []
+
+
 class QueryResponse(BaseModel):
     entities: List[Entity]
     groups: List[Group] = []
+    root_operator: Optional[str] = None
+    root_groups: List[RootGroup] = []
     warnings: List[str] = []
     age_constraints: List[Dict[str, Any]] = []
     time_constraints: List[Dict[str, Any]] = []
