@@ -91,11 +91,7 @@
   "age_overrides": [],
   "time_patterns": [
     {
-      "pattern": "recorded\\s+in\\s+(?:the\\s+)?last\\s+(\\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\\s+(years|year|months|month)",
-      "op": "last"
-    },
-    {
-      "pattern": "(?:in\\s+(?:the\\s+))?last\\s+(\\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\\s+(years|year|months|month)",
+      "pattern": "(?:recorded\\s+in\\s+|in\\s+|over\\s+|within\\s+)?(?:the\\s+)?(?:last|past|preceding)\\s+(\\d+|[a-z][a-z -]*)\\s+(years|year|months|month)",
       "op": "last"
     }
   ],

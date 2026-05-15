@@ -6,14 +6,9 @@ import sys
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+from word2number import w2n
 
 NEGATION_TERMS = {"no", "not", "without", "never"}
-
-WORD_TO_INT = {
-    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-    "eleven": 11, "twelve": 12,
-}
 
 
 def load_mappings() -> Dict[str, Any]:
@@ -273,7 +268,10 @@ class RuleEngine:
             for m in pattern.finditer(cleaned):
                 if op == "last":
                     value_str = m.group(1)
-                    value = int(value_str) if value_str.isdigit() else WORD_TO_INT.get(value_str.lower(), 0)
+                    try:
+                        value = w2n.word_to_num(value_str)
+                    except ValueError:
+                        continue
                     unit = m.group(2).lower()
                     now = datetime.utcnow()
 

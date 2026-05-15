@@ -408,6 +408,46 @@ def test_stroke_with_last_five_years_time_constraint():
         app.state.resolver_store = previous_store
 
 
+def test_time_constraint_alternate_phrasings():
+    """past / preceding / over the past / within the last all produce a time constraint."""
+    local_concepts = [
+        {
+            "concept_id": 381591,
+            "concept_name": "Stroke",
+            "description": "Stroke",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class": "Clinical Finding",
+            "standard_concept": "S",
+            "concept_code": "230690007",
+            "count": 5000,
+            "ncollections": 2,
+            "all_synthetic": 0,
+        },
+    ]
+
+    phrasings = [
+        "people with stroke in the past five years",
+        "people with stroke over the past 3 years",
+        "people with stroke within the last six months",
+        "people with stroke in the preceding two years",
+    ]
+
+    previous_store = app.state.resolver_store
+    try:
+        app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+        for query in phrasings:
+            response = client.post("/extract?threshold=70", json={"query": query})
+            assert response.status_code == 200
+            body = response.json()
+            all_time = list(body.get("time_constraints", []))
+            for e in body["entities"]:
+                all_time.extend(e.get("time_constraints", []))
+            assert len(all_time) > 0, f"expected a time constraint for: {query!r}"
+    finally:
+        app.state.resolver_store = previous_store
+
+
 def test_acronym_expansion_for_copd():
     local_concepts = [
         {
