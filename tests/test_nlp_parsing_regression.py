@@ -587,3 +587,61 @@ def test_sequence_warning_for_examples():
             )
     finally:
         app.state.resolver_store = previous_store
+
+
+def test_covid_researcher_adults_with_diabetes_and_covid_last_three_years():
+    """researcher-covid: comorbidity study — diabetes as COVID severity modifier, time-anchored."""
+    local_concepts = [
+        {
+            "concept_id": 37311061,
+            "concept_name": "COVID-19",
+            "description": "COVID-19",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class": "Clinical Finding",
+            "standard_concept": "S",
+            "concept_code": "840539006",
+            "count": 5000,
+            "ncollections": 3,
+            "all_synthetic": 0,
+        },
+        {
+            "concept_id": 201826,
+            "concept_name": "Type 2 diabetes mellitus",
+            "description": "Type 2 diabetes mellitus",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class": "Clinical Finding",
+            "standard_concept": "S",
+            "concept_code": "44054006",
+            "count": 8000,
+            "ncollections": 3,
+            "all_synthetic": 0,
+        },
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "adults with type 2 diabetes who were hospitalised with COVID-19 in the last three years"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+
+        concept_names = [e["attributes"]["concept_name"] for e in body["entities"]]
+        assert "Type 2 diabetes mellitus" in concept_names
+        assert "COVID-19" in concept_names
+
+        # adults → query-level age constraint min 18
+        assert has_age_constraint(body, min_age=18, max_age=None, inclusive=True, scope="query")
+
+        # time window should be present at query or entity level
+        all_time = list(body.get("time_constraints", []))
+        for e in body["entities"]:
+            all_time.extend(e.get("time_constraints", []))
+        assert len(all_time) > 0, "expected a time constraint for 'last three years'"
+    finally:
+        app.state.resolver_store = previous_store
