@@ -148,9 +148,18 @@ class Group(BaseModel):
     time_constraints: List[Dict[str, Any]] = []
 
 
+class RootGroup(BaseModel):
+    entities: List[Entity] = []
+    groups: List[Group] = []
+    age_constraints: List[Dict[str, Any]] = []
+    time_constraints: List[Dict[str, Any]] = []
+
+
 class QueryResponse(BaseModel):
     entities: List[Entity]
     groups: List[Group] = []
+    root_operator: Optional[str] = None
+    root_groups: List[RootGroup] = []
     warnings: List[str] = []
     age_constraints: List[Dict[str, Any]] = []
     time_constraints: List[Dict[str, Any]] = []
@@ -178,13 +187,16 @@ async def extract_entities(
     phrase_first: bool = Query(
         True, description="Prefer phrase overlap when token matching is available"
     ),
+    max_matches: Optional[int] = Query(
+        None, ge=1, description="Max concept matches per entity (defaults to RESOLVER_MAX_MATCHES)"
+    ),
     store: ResolverStore = Depends(get_resolver_store),
 ):
     """
     Extract clinical concepts from query using fuzzy matching.
     """
     resolver = await store.get_resolver()
-    ret_value = PARSER.extract(payload.query, threshold, phrase_first, resolver)
+    ret_value = PARSER.extract(payload.query, threshold, phrase_first, resolver, max_matches=max_matches)
 
     print(f"[Request] query='{payload.query}' => entities={ret_value}")
 

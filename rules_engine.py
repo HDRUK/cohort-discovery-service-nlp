@@ -6,6 +6,7 @@ import sys
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+from word2number import w2n
 
 NEGATION_TERMS = {"no", "not", "without", "never"}
 
@@ -266,7 +267,11 @@ class RuleEngine:
         for pattern, op in self.time_patterns:
             for m in pattern.finditer(cleaned):
                 if op == "last":
-                    value = int(m.group(1))
+                    value_str = m.group(1)
+                    try:
+                        value = w2n.word_to_num(value_str)
+                    except ValueError:
+                        continue
                     unit = m.group(2).lower()
                     now = datetime.utcnow()
 
@@ -319,6 +324,11 @@ class RuleEngine:
             seen.add(key)
             merged.append(entry)
         return merged
+
+    def strip_demographic_age_prefix(self, text: str) -> str:
+        for term in self.demographic_age_defaults.keys():
+            text = re.sub(rf"^{re.escape(term)}s?\s+", "", text, flags=re.IGNORECASE)
+        return text.strip()
 
     def has_non_demographic_content(self, text: str) -> bool:
         text = re.sub(r"\b(MALE|FEMALE|CHILD)\b", "", text, flags=re.IGNORECASE)
