@@ -64,7 +64,9 @@ def test_cancer_and_diabetes_with_age_constraint():
     try:
         response = client.post(
             "/extract?threshold=70",
-            json={"query": "patients who have been diagnosed with cancer and have diabetes aged over 40"},
+            json={
+                "query": "patients who have been diagnosed with cancer and have diabetes aged over 40"
+            },
         )
 
         assert response.status_code == 200
@@ -77,7 +79,8 @@ def test_cancer_and_diabetes_with_age_constraint():
             for e in body["entities"]
         )
         assert any(
-            e.get("attributes", {}).get("description", "").lower() == "type 2 diabetes mellitus"
+            e.get("attributes", {}).get("description", "").lower()
+            == "type 2 diabetes mellitus"
             for e in body["entities"]
         )
 
@@ -405,6 +408,46 @@ def test_stroke_with_last_five_years_time_constraint():
         app.state.resolver_store = previous_store
 
 
+def test_time_constraint_alternate_phrasings():
+    """past / preceding / over the past / within the last all produce a time constraint."""
+    local_concepts = [
+        {
+            "concept_id": 381591,
+            "concept_name": "Stroke",
+            "description": "Stroke",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class": "Clinical Finding",
+            "standard_concept": "S",
+            "concept_code": "230690007",
+            "count": 5000,
+            "ncollections": 2,
+            "all_synthetic": 0,
+        },
+    ]
+
+    phrasings = [
+        "people with stroke in the past five years",
+        "people with stroke over the past 3 years",
+        "people with stroke within the last six months",
+        "people with stroke in the preceding two years",
+    ]
+
+    previous_store = app.state.resolver_store
+    try:
+        app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+        for query in phrasings:
+            response = client.post("/extract?threshold=70", json={"query": query})
+            assert response.status_code == 200
+            body = response.json()
+            all_time = list(body.get("time_constraints", []))
+            for e in body["entities"]:
+                all_time.extend(e.get("time_constraints", []))
+            assert len(all_time) > 0, f"expected a time constraint for: {query!r}"
+    finally:
+        app.state.resolver_store = previous_store
+
+
 def test_acronym_expansion_for_copd():
     local_concepts = [
         {
@@ -513,22 +556,32 @@ def test_gender_does_not_inherit_time_constraint_from_disease():
         entities = body["entities"]
 
         # Both concepts must be resolved
-        descriptions = [e.get("attributes", {}).get("description", "").lower() for e in entities]
+        descriptions = [
+            e.get("attributes", {}).get("description", "").lower() for e in entities
+        ]
         assert "female" in descriptions, "Expected FEMALE entity to be resolved"
         assert "asthma" in descriptions, "Expected Asthma entity to be resolved"
 
         # Happy path: FEMALE entity must have no time constraints
-        female_entities = [e for e in entities if e.get("attributes", {}).get("description", "").lower() == "female"]
+        female_entities = [
+            e
+            for e in entities
+            if e.get("attributes", {}).get("description", "").lower() == "female"
+        ]
         for entity in female_entities:
             assert entity.get("time_constraints", []) == [], (
                 f"FEMALE entity should have no time constraints, got: {entity.get('time_constraints')}"
             )
 
         # Sad path (regression check): Asthma entity must carry the time constraint
-        asthma_entities = [e for e in entities if e.get("attributes", {}).get("description", "").lower() == "asthma"]
-        assert any(
-            len(e.get("time_constraints", [])) > 0 for e in asthma_entities
-        ), "Asthma entity should have a time constraint for 'last 10 years'"
+        asthma_entities = [
+            e
+            for e in entities
+            if e.get("attributes", {}).get("description", "").lower() == "asthma"
+        ]
+        assert any(len(e.get("time_constraints", [])) > 0 for e in asthma_entities), (
+            "Asthma entity should have a time constraint for 'last 10 years'"
+        )
     finally:
         app.state.resolver_store = previous_store
 
@@ -582,8 +635,89 @@ def test_sequence_warning_for_examples():
             body = response.json()
             assert "warnings" in body
             assert any(
-                "Temporal sequencing between events (A before/after B) is not supported." in warning
+                "Temporal sequencing between events (A before/after B) is not supported."
+                in warning
                 for warning in body["warnings"]
             )
+    finally:
+        app.state.resolver_store = previous_store
+
+
+def test_covid_researcher_adults_with_diabetes_and_covid_last_three_years():
+    """researcher-covid: comorbidity study — diabetes as COVID severity modifier, time-anchored."""
+    local_concepts = [
+        {
+            "concept_id": 37311061,
+            "concept_name": "COVID-19",
+            "description": "COVID-19",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class": "Clinical Finding",
+            "standard_concept": "S",
+            "concept_code": "840539006",
+            "count": 5000,
+            "ncollections": 3,
+            "all_synthetic": 0,
+        },
+        {
+            "concept_id": 201826,
+            "concept_name": "Type 2 diabetes mellitus",
+            "description": "Type 2 diabetes mellitus",
+            "domain_id": "Condition",
+            "vocabulary_id": "SNOMED",
+            "concept_class": "Clinical Finding",
+            "standard_concept": "S",
+            "concept_code": "44054006",
+            "count": 8000,
+            "ncollections": 3,
+            "all_synthetic": 0,
+        },
+        {
+            "concept_id": 8715,
+            "concept_name": "Hospital admission",
+            "description": "Hospital admission",
+            "domain_id": "Observation",
+            "vocabulary_id": "SNOMED",
+            "concept_class": "Clinical Finding",
+            "standard_concept": "S",
+            "concept_code": "32485007",
+            "count": 15000,
+            "ncollections": 3,
+            "all_synthetic": 0,
+        },
+    ]
+
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(local_concepts))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={
+                "query": "adults with type 2 diabetes who were hospitalised with COVID-19 in the last three years"
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+
+        concept_names = [e["attributes"]["concept_name"] for e in body["entities"]]
+        assert "Type 2 diabetes mellitus" in concept_names
+        assert "COVID-19" in concept_names
+
+        # adults → query-level age constraint min 18
+        assert has_age_constraint(
+            body, min_age=18, max_age=None, inclusive=True, scope="query"
+        )
+
+        assert any(
+            "Visit-based filtering is not currently supported." in w
+            for w in body.get("warnings", [])
+        ), "expected visit-based filtering warning for 'hospitalised'"
+
+        # time window should be present at query or entity level
+        all_time = list(body.get("time_constraints", []))
+        for e in body["entities"]:
+            all_time.extend(e.get("time_constraints", []))
+        assert len(all_time) > 0, "expected a time constraint for 'last three years'"
     finally:
         app.state.resolver_store = previous_store

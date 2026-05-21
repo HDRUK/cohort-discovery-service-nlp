@@ -91,11 +91,7 @@
   "age_overrides": [],
   "time_patterns": [
     {
-      "pattern": "recorded\\s+in\\s+(?:the\\s+)?last\\s+(\\d+)\\s+(years|year|months|month)",
-      "op": "last"
-    },
-    {
-      "pattern": "last\\s+(\\d+)\\s+(years|year|months|month)",
+      "pattern": "(?:recorded\\s+in\\s+|in\\s+|over\\s+|within\\s+)?(?:the\\s+)?(?:last|past|preceding)\\s+(\\d+|[a-z][a-z -]*)\\s+(years|year|months|month)",
       "op": "last"
     }
   ],
@@ -129,7 +125,7 @@
   "demographic_concept_patterns": ["\\b(MALE|FEMALE)\\b"],
   "unsupported_patterns": {
     "visit": {
-      "pattern": "\\b(visit|gp|hospital|admitted)\\b",
+      "pattern": "\\b(visit|gp|hospital(?:ised|ization|isation)?|admitted|admission)\\b",
       "warning": "Visit-based filtering is not currently supported."
     },
     "sequence": {

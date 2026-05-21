@@ -298,6 +298,189 @@ def test_group_age_constraints_captured_within_group():
 
 
 # ---------------------------------------------------------------------------
+# Top-level OR — root_operator and root_groups
+# ---------------------------------------------------------------------------
+
+
+def test_top_level_or_returns_root_operator():
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(PAREN_CONCEPTS))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "COPD or asthma"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["root_operator"] == "or"
+    finally:
+        app.state.resolver_store = previous_store
+
+
+def test_top_level_or_root_groups_have_correct_entities():
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(PAREN_CONCEPTS))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "COPD or asthma"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body["root_groups"]) == 2
+
+        group_0_descriptions = {
+            e["attributes"].get("description", "").lower()
+            for e in body["root_groups"][0]["entities"]
+        }
+        group_1_descriptions = {
+            e["attributes"].get("description", "").lower()
+            for e in body["root_groups"][1]["entities"]
+        }
+
+        assert "chronic obstructive pulmonary disease" in group_0_descriptions
+        assert "asthma" in group_1_descriptions
+    finally:
+        app.state.resolver_store = previous_store
+
+
+def test_top_level_or_backward_compat_entities_flattened():
+    """root_operator queries still populate the top-level entities array."""
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(PAREN_CONCEPTS))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "COPD or asthma"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        descriptions = {
+            e["attributes"].get("description", "").lower() for e in body["entities"]
+        }
+        assert "chronic obstructive pulmonary disease" in descriptions
+        assert "asthma" in descriptions
+    finally:
+        app.state.resolver_store = previous_store
+
+
+def test_triple_top_level_or_produces_three_root_groups():
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(PAREN_CONCEPTS))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "COPD or asthma or type 2 diabetes mellitus"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["root_operator"] == "or"
+        assert len(body["root_groups"]) == 3
+    finally:
+        app.state.resolver_store = previous_store
+
+
+def test_paren_group_or_bare_entity_returns_root_operator():
+    """(COPD or asthma) or diabetes — top-level OR with a paren group on one side."""
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(PAREN_CONCEPTS))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "(COPD or asthma) or type 2 diabetes mellitus"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["root_operator"] == "or"
+        assert len(body["root_groups"]) == 2
+
+        # First root group has a paren sub-group, no flat entities
+        first_root_group_entities = body["root_groups"][0]["entities"]
+        first_root_group_groups = body["root_groups"][0]["groups"]
+        assert first_root_group_entities == []
+        assert len(first_root_group_groups) == 1
+        assert first_root_group_groups[0]["operator"] == "or"
+
+        # Second root group has diabetes as a flat entity
+        second_descriptions = {
+            e["attributes"].get("description", "").lower()
+            for e in body["root_groups"][1]["entities"]
+        }
+        assert "type 2 diabetes mellitus" in second_descriptions
+    finally:
+        app.state.resolver_store = previous_store
+
+
+def test_and_query_has_no_root_operator():
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(PAREN_CONCEPTS))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "COPD and asthma"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body.get("root_operator") is None
+        assert body.get("root_groups", []) == []
+    finally:
+        app.state.resolver_store = previous_store
+
+
+def test_leading_demographic_constraint_propagates_to_all_or_groups():
+    """'adults with asthma or type 2 diabetes mellitus' — adults age constraint
+    must apply to both root groups, not only the first."""
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(PAREN_CONCEPTS))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "adults with asthma or type 2 diabetes mellitus"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["root_operator"] == "or"
+        assert len(body["root_groups"]) == 2
+
+        for rg in body["root_groups"]:
+            age_constraints = rg.get("age_constraints", [])
+            assert any(
+                c.get("min") == 18 and c.get("max") is None and c.get("inclusive") is True
+                for c in age_constraints
+            ), f"Expected adults (min=18) constraint in root_group, got: {age_constraints}"
+    finally:
+        app.state.resolver_store = previous_store
+
+
+def test_per_group_demographic_constraints_not_cross_applied():
+    """'adults with asthma or children with type 2 diabetes mellitus' — each
+    group keeps its own distinct age constraint; neither is propagated."""
+    previous_store = app.state.resolver_store
+    app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(PAREN_CONCEPTS))
+    try:
+        response = client.post(
+            "/extract?threshold=70",
+            json={"query": "adults with asthma or children with type 2 diabetes mellitus"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["root_operator"] == "or"
+        assert len(body["root_groups"]) == 2
+
+        group_0_age = body["root_groups"][0].get("age_constraints", [])
+        group_1_age = body["root_groups"][1].get("age_constraints", [])
+
+        # Group 0 has adults (min=18), group 1 has children (max=17)
+        assert any(c.get("min") == 18 for c in group_0_age), f"group 0: {group_0_age}"
+        assert any(c.get("max") == 17 for c in group_1_age), f"group 1: {group_1_age}"
+        # Neither group should have both constraints
+        assert not any(c.get("max") == 17 for c in group_0_age)
+        assert not any(c.get("min") == 18 for c in group_1_age)
+    finally:
+        app.state.resolver_store = previous_store
+
+
+# ---------------------------------------------------------------------------
 # Negative paths — warnings are returned, but payloads are still present
 # ---------------------------------------------------------------------------
 

@@ -49,6 +49,41 @@ class QueryParser:
 
         return groups, []
 
+    def _split_top_level_or(self, query: str) -> List[str]:
+        """Split query on OR operators at depth 0 only, preserving parenthesised groups."""
+        segments = []
+        buffer = ""
+        depth = 0
+        i = 0
+        length = len(query)
+
+        while i < length:
+            ch = query[i]
+            if ch == "(":
+                depth += 1
+                buffer += ch
+            elif ch == ")":
+                depth = max(0, depth - 1)
+                buffer += ch
+            elif depth == 0:
+                match = re.match(r"\s+or\s+", query[i:], re.IGNORECASE)
+                if match:
+                    if buffer.strip():
+                        segments.append(buffer.strip())
+                    buffer = ""
+                    i += len(match.group(0))
+                    continue
+                else:
+                    buffer += ch
+            else:
+                buffer += ch
+            i += 1
+
+        if buffer.strip():
+            segments.append(buffer.strip())
+
+        return segments if len(segments) > 1 else []
+
     def _detect_group_operator(self, text: str) -> Optional[str]:
         """Returns 'and', 'or', or None if both (mixed) or neither are present."""
         has_and = bool(re.search(r"\band\b", text, re.IGNORECASE))
@@ -94,12 +129,63 @@ class QueryParser:
         phrase_first: bool,
         resolver: Any,
         _skip_paren: bool = False,
+        max_matches: Optional[int] = None,
     ) -> Dict[str, Any]:
         paren_groups: List[Dict[str, Any]] = []
         paren_warnings: List[str] = []
         working_query = query
 
         if not _skip_paren:
+            or_segments = self._split_top_level_or(query)
+            if or_segments:
+                all_entities: List[Dict[str, Any]] = []
+                all_groups: List[Dict[str, Any]] = []
+                root_groups: List[Dict[str, Any]] = []
+                all_warnings: List[str] = []
+                all_age_constraints: List[Dict[str, Any]] = []
+                all_time_constraints: List[Dict[str, Any]] = []
+
+                for segment in or_segments:
+                    seg_result = self.extract(segment, threshold, phrase_first, resolver, max_matches=max_matches)
+                    all_entities.extend(seg_result["entities"])
+                    all_groups.extend(seg_result.get("groups", []))
+                    all_warnings.extend(seg_result["warnings"])
+                    all_age_constraints.extend(seg_result.get("age_constraints", []))
+                    all_time_constraints.extend(seg_result.get("time_constraints", []))
+                    root_groups.append({
+                        "entities": seg_result["entities"],
+                        "groups": seg_result.get("groups", []),
+                        "age_constraints": list(seg_result.get("age_constraints", [])),
+                        "time_constraints": list(seg_result.get("time_constraints", [])),
+                    })
+
+                # If exactly one root group carries age/time constraints, treat
+                # them as shared across all groups — e.g. "adults with cancer or
+                # covid" should apply the adults constraint to both groups.
+                groups_with_age = [rg for rg in root_groups if rg["age_constraints"]]
+                if len(groups_with_age) == 1:
+                    shared_age = groups_with_age[0]["age_constraints"]
+                    for rg in root_groups:
+                        if not rg["age_constraints"]:
+                            rg["age_constraints"] = list(shared_age)
+
+                groups_with_time = [rg for rg in root_groups if rg["time_constraints"]]
+                if len(groups_with_time) == 1:
+                    shared_time = groups_with_time[0]["time_constraints"]
+                    for rg in root_groups:
+                        if not rg["time_constraints"]:
+                            rg["time_constraints"] = list(shared_time)
+
+                return {
+                    "entities": all_entities,
+                    "groups": all_groups,
+                    "root_operator": "or",
+                    "root_groups": root_groups,
+                    "warnings": list(dict.fromkeys(all_warnings)),
+                    "age_constraints": all_age_constraints,
+                    "time_constraints": all_time_constraints,
+                }
+
             raw_groups, paren_warnings = self._validate_paren_groups(query)
             if not paren_warnings:
                 for open_idx, close_idx, inner_text in raw_groups:
@@ -111,7 +197,7 @@ class QueryParser:
                             "All operators within a group must be the same"
                         )
                     group_result = self.extract(
-                        inner_text, threshold, phrase_first, resolver, _skip_paren=True
+                        inner_text, threshold, phrase_first, resolver, _skip_paren=True, max_matches=max_matches
                     )
                     paren_groups.append(
                         {
@@ -157,6 +243,7 @@ class QueryParser:
             candidate_time_constraints, candidate_without_time = (
                 self.engine.extract_time_constraints(candidate_without_age, "entity")
             )
+            candidate_without_time = self.engine.strip_demographic_age_prefix(candidate_without_time)
             candidate_clean = self.engine.clean_candidates(candidate_without_time)
             candidate_clean = self.engine.strip_dangling_logical_operators(
                 candidate_clean
@@ -187,6 +274,7 @@ class QueryParser:
             candidate_time_constraints, candidate_without_time = (
                 self.engine.extract_time_constraints(candidate_without_age, "entity")
             )
+            candidate_without_time = self.engine.strip_demographic_age_prefix(candidate_without_time)
             candidate_clean = self.engine.clean_candidates(candidate_without_time)
             candidate_clean = self.engine.strip_dangling_logical_operators(
                 candidate_clean
@@ -260,6 +348,7 @@ class QueryParser:
             candidate_time_constraints, candidate_without_time = (
                 self.engine.extract_time_constraints(candidate_without_age, "entity")
             )
+            candidate_without_time = self.engine.strip_demographic_age_prefix(candidate_without_time)
             candidate_clean = self.engine.clean_candidates(candidate_without_time)
 
             candidate_clean = self.engine.strip_dangling_logical_operators(
@@ -338,7 +427,7 @@ class QueryParser:
 
             # Resolve concepts
             matches = resolver.resolve(
-                candidate_normalised, threshold, phrase_first=phrase_first
+                candidate_normalised, threshold, phrase_first=phrase_first, max_matches=max_matches
             )
             index = working_query.lower().find(candidate.lower())
 
