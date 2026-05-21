@@ -1,3 +1,9 @@
+## [1.7.0](https://github.com/HDRUK/cohort-discovery-service-nlp/compare/v1.6.0...v1.7.0) (2026-05-21)
+
+### ✨ Features
+
+* detect top-level OR and return root_operator/root_groups in extract response ([ba8f082](https://github.com/HDRUK/cohort-discovery-service-nlp/commit/ba8f082e728517be3277d81a2a8582ecab2afea1))
+
 ## [1.6.0](https://github.com/HDRUK/cohort-discovery-service-nlp/compare/v1.5.0...v1.6.0) (2026-03-19)
 
 ### ✨ Features
