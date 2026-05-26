@@ -7,27 +7,11 @@ on:
       - dev
 
 jobs:
-  setup-standalone:
-    runs-on: ubuntu-latest
-    environment: dev-standalone
-    outputs:
-      docker_build_args: ${{ steps.args.outputs.docker_build_args }}
-
-    steps:
-      - uses: actions/checkout@v6
-      - id: args
-        run: |
-          ARGS=""
-          ARGS+="--build-arg COMPOSER_AUTH "
-          echo "docker_build_args=$ARGS" >> "$GITHUB_OUTPUT"
-
   build-standalone:
-    needs: setup-standalone
     uses: HDRUK/github-actions-templates/.github/workflows/docker-build.yaml@main
     with:
       chart_path: chart/cohort-nlp/Chart.yaml
       environment: dev-standalone
-      docker_build_args: ${{ needs.setup-standalone.outputs.docker_build_args }}
     secrets: inherit
 
   deploy-standalone:
