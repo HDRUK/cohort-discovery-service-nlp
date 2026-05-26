@@ -7,9 +7,9 @@ on:
       - dev
 
 jobs:
-  setup:
+  setup-standalone:
     runs-on: ubuntu-latest
-    environment: dev
+    environment: dev-standalone
     outputs:
       docker_build_args: ${{ steps.args.outputs.docker_build_args }}
 
@@ -21,20 +21,29 @@ jobs:
           ARGS+="--build-arg COMPOSER_AUTH "
           echo "docker_build_args=$ARGS" >> "$GITHUB_OUTPUT"
 
-  build:
-    needs: setup
+  build-standalone:
+    needs: setup-standalone
     uses: HDRUK/github-actions-templates/.github/workflows/docker-build.yaml@main
     with:
       chart_path: chart/cohort-nlp/Chart.yaml
-      environment: dev
-      docker_build_args: ${{ needs.setup.outputs.docker_build_args }}
+      environment: dev-standalone
+      docker_build_args: ${{ needs.setup-standalone.outputs.docker_build_args }}
     secrets: inherit
 
-  deploy:
-    needs: build
+  deploy-standalone:
+    needs: build-standalone
     uses: HDRUK/github-actions-templates/.github/workflows/deploy-release.yml@main
     with:
-      env: dev
+      env: dev-standalone
+      chart_path: chart/cohort-nlp/Chart.yaml
+      git_ref: dev
+    secrets: inherit
+
+  deploy-integrated:
+    needs: build-standalone
+    uses: HDRUK/github-actions-templates/.github/workflows/deploy-release.yml@main
+    with:
+      env: dev-integrated
       chart_path: chart/cohort-nlp/Chart.yaml
       git_ref: dev
     secrets: inherit
