@@ -12,48 +12,16 @@ jobs:
       chart_path: chart/cohort-nlp/Chart.yaml
     secrets: inherit
 
-  setup-preprod:
-    runs-on: ubuntu-latest
-    environment: preprod
-    outputs:
-      docker_build_args: ${{ steps.args.outputs.docker_build_args }}
-    steps:
-      - id: args
-        run: |
-          ARGS=""
-          ARGS+="--build-arg API_BASE_URL=${{ vars.API_BASE_URL }} " 
-          ARGS+="--build-arg NEXT_PUBLIC_LOGIN_URL=${{ vars.NEXT_PUBLIC_LOGIN_URL }} " 
-          ARGS+="--build-arg APPLICATION_MODE=${{ vars.APPLICATION_MODE }} "
-          echo "docker_build_args=$ARGS" >> "$GITHUB_OUTPUT"
-
-  setup-prod:
-    runs-on: ubuntu-latest
-    environment: prod
-    outputs:
-      docker_build_args: ${{ steps.args.outputs.docker_build_args }}
-    steps:
-      - id: args
-        run: |
-          ARGS=""
-          ARGS+="--build-arg API_BASE_URL=${{ vars.API_BASE_URL }} " 
-          ARGS+="--build-arg NEXT_PUBLIC_LOGIN_URL=${{ vars.NEXT_PUBLIC_LOGIN_URL }} " 
-          ARGS+="--build-arg APPLICATION_MODE=${{ vars.APPLICATION_MODE }} "
-          echo "docker_build_args=$ARGS" >> "$GITHUB_OUTPUT"
-
   build-preprod:
-    needs: setup-preprod
     uses: HDRUK/github-actions-templates/.github/workflows/docker-build.yaml@main
     with:
       environment: preprod
-      docker_build_args: ${{ needs.setup-preprod.outputs.docker_build_args }}
       chart_path: chart/cohort-nlp/Chart.yaml
     secrets: inherit
 
   build-prod:
-    needs: setup-prod
     uses: HDRUK/github-actions-templates/.github/workflows/docker-build.yaml@main
     with:
       environment: prod
-      docker_build_args: ${{ needs.setup-prod.outputs.docker_build_args }}
       chart_path: chart/cohort-nlp/Chart.yaml
     secrets: inherit
