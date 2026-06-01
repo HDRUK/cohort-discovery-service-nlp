@@ -12,13 +12,6 @@ jobs:
       chart_path: chart/cohort-nlp/Chart.yaml
     secrets: inherit
 
-  build-preprod:
-    uses: HDRUK/github-actions-templates/.github/workflows/docker-build.yaml@main
-    with:
-      environment: preprod
-      chart_path: chart/cohort-nlp/Chart.yaml
-    secrets: inherit
-
   build-prod:
     uses: HDRUK/github-actions-templates/.github/workflows/docker-build.yaml@main
     with:
