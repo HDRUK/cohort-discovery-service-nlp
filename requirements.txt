@@ -7,4 +7,5 @@ mysql-connector-python
 python-dotenv
 rapidfuzz==3.5.2
 word2number
+httpx
 pytest

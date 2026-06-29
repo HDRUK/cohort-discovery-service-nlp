@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Query, Request
 from pydantic import BaseModel
 
+from concepts import router as concepts_router
 from parsing import QueryParser
 from rules_engine import RuleEngine
 from store import ResolverStore
@@ -97,6 +98,7 @@ def enrich_resolver(resolver, concepts):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    app.state.db_config = DB_CONFIG
     store = ResolverStore(
         load_concepts_from_mysql,
         ttl_seconds=STORE_REFRESH_TTL,
@@ -116,6 +118,7 @@ def get_resolver_store(request: Request) -> ResolverStore:
 
 # FastAPI app
 app = FastAPI(title="Project Daphne NLP Service", version="1.0", lifespan=lifespan)
+app.include_router(concepts_router)
 
 # Parsing engine
 ENGINE = RuleEngine()
