@@ -2,8 +2,7 @@ from typing import Any, Dict, List, Optional
 
 import mysql.connector
 
-from concepts import build_score_sql, build_where_conditions
-from medcat import get_medcat_names
+from concepts import _get_medcat_names, build_score_sql, build_where_conditions
 
 
 class MySQLConceptResolver:
@@ -23,7 +22,7 @@ class MySQLConceptResolver:
         if not text:
             return []
 
-        medcat_expansions = get_medcat_names([text])
+        medcat_expansions = _get_medcat_names([text])
 
         search_conds, search_bindings = build_where_conditions([], [text], medcat_expansions)
         if not search_conds:
