@@ -10,6 +10,7 @@ from fastapi import Depends, FastAPI, Query, Request
 from pydantic import BaseModel
 
 from concepts import router as concepts_router
+from mysql_concept_resolver import MySQLConceptResolver
 from parsing import QueryParser
 from rules_engine import RuleEngine
 from store import ResolverStore
@@ -19,6 +20,7 @@ from store import ResolverStore
 load_dotenv()
 
 STORE_REFRESH_TTL = int(os.getenv("STORE_REFRESH_TTL", 60))
+RESOLVER_BACKEND = os.getenv("RESOLVER_BACKEND", "sql")
 
 # MySQL config
 DB_CONFIG = {
@@ -184,6 +186,7 @@ class AcronymResponse(BaseModel):
 @app.post("/extract", response_model=QueryResponse)
 async def extract_entities(
     payload: QueryRequest,
+    request: Request,
     threshold: float = Query(
         DEFAULT_THRESHOLD, description="Fuzzy match threshold 0-100"
     ),
@@ -196,9 +199,18 @@ async def extract_entities(
     store: ResolverStore = Depends(get_resolver_store),
 ):
     """
-    Extract clinical concepts from query using fuzzy matching.
+    Extract clinical concepts from query.
+    Set RESOLVER_BACKEND=sql (default) for MySQL+MedCAT lookup,
+    or RESOLVER_BACKEND=fuzzy for in-memory fuzzy matching.
     """
-    resolver = await store.get_resolver()
+    if RESOLVER_BACKEND == "fuzzy":
+        resolver = await store.get_resolver()
+    else:
+        db_config = getattr(request.app.state, "db_config", None) or DB_CONFIG
+        store_resolver = await store.get_resolver()
+        resolver = MySQLConceptResolver(db_config)
+        resolver.acronym_index = getattr(store_resolver, "acronym_index", {})
+
     ret_value = PARSER.extract(payload.query, threshold, phrase_first, resolver, max_matches=max_matches)
 
     print(f"[Request] query='{payload.query}' => entities={ret_value}")
