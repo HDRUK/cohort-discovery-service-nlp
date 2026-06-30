@@ -12,6 +12,11 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
+CONCEPT_MATCH_SCORE_EXACT = int(os.getenv("CONCEPT_MATCH_SCORE_EXACT", 1000))
+CONCEPT_MATCH_SCORE_CONTAINS = int(os.getenv("CONCEPT_MATCH_SCORE_CONTAINS", 500))
+CONCEPT_MATCH_SCORE_PREFIX = int(os.getenv("CONCEPT_MATCH_SCORE_PREFIX", 100))
+CONCEPT_MATCH_SCORE_SYNONYM = int(os.getenv("CONCEPT_MATCH_SCORE_SYNONYM", 1000))
+
 
 class ConceptSearchRequest(BaseModel):
     concept_id: Optional[List[int]] = None
@@ -99,19 +104,12 @@ def find_synonym_concept_ids(
     synonym_map: Dict[int, List[str]], terms: List[str]
 ) -> List[int]:
     """Return concept_ids whose synonyms contain all tokens from any of the given terms (word-boundary match)."""
-    matched: set = set()
-    for term in terms:
-        term = term.strip()
-        if not term:
-            continue
-        tokens = term.lower().split()
-        for concept_id, synonyms in synonym_map.items():
-            for syn in synonyms:
-                syn_words = set(syn.split())
-                if all(tok in syn_words for tok in tokens):
-                    matched.add(concept_id)
-                    break
-    return list(matched)
+    token_sets = [set(term.lower().split()) for term in terms if term.strip()]
+    return [
+        cid
+        for cid, synonyms in synonym_map.items()
+        if any(tokens <= set(syn.split()) for tokens in token_sets for syn in synonyms)
+    ]
 
 
 def _normalise_for_like(term: str, strip_s: bool = False) -> str:
@@ -165,11 +163,11 @@ def build_score_sql(
         if not term:
             continue
         clauses.append(
-            """
+            f"""
             CASE
-                WHEN LOWER(d.description) = LOWER(%s) THEN 1000
-                WHEN LOWER(d.description) LIKE LOWER(%s) THEN 500
-                WHEN LOWER(d.description) LIKE LOWER(%s) THEN 100
+                WHEN LOWER(d.description) = LOWER(%s) THEN {CONCEPT_MATCH_SCORE_EXACT}
+                WHEN LOWER(d.description) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_CONTAINS}
+                WHEN LOWER(d.description) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_PREFIX}
                 ELSE 0
             END
             """
@@ -184,10 +182,10 @@ def build_score_sql(
             continue
         normalised = _normalise_for_like(term, strip_s=True)
         clauses.append(
-            """
+            f"""
             CASE
-                WHEN LOWER(d.description) LIKE LOWER(%s) THEN 500
-                WHEN LOWER(d.description) LIKE LOWER(%s) THEN 100
+                WHEN LOWER(d.description) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_CONTAINS}
+                WHEN LOWER(d.description) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_PREFIX}
                 ELSE 0
             END
             """
@@ -197,9 +195,9 @@ def build_score_sql(
 
     for cid in concept_ids:
         clauses.append(
-            """
+            f"""
             CASE
-                WHEN d.concept_id = %s THEN 1000
+                WHEN d.concept_id = %s THEN {CONCEPT_MATCH_SCORE_EXACT}
                 ELSE 0
             END
             """
@@ -266,10 +264,7 @@ def search_concepts(
 
     # --- SYNONYM SEARCH (in-memory, pre-loaded at startup) ---
     store = request.app.state.resolver_store
-    store_resolver = store._resolver
-    synonym_map: Dict[int, List[str]] = (
-        getattr(store_resolver, "synonym_map", {}) if store_resolver else {}
-    )
+    synonym_map: Dict[int, List[str]] = store.synonym_map
     syn_t0 = time.time()
     syn_concept_ids = find_synonym_concept_ids(
         synonym_map, (payload.concept_name or []) + medcat_names
@@ -288,7 +283,7 @@ def search_concepts(
         syn_where_conds.append(f"d.concept_id IN ({placeholders})")
         syn_where_bindings.extend(syn_concept_ids)
         syn_score_parts.append(
-            f"CASE WHEN d.concept_id IN ({placeholders}) THEN 500 ELSE 0 END"
+            f"CASE WHEN d.concept_id IN ({placeholders}) THEN {CONCEPT_MATCH_SCORE_SYNONYM} ELSE 0 END"
         )
         syn_score_bindings.extend(syn_concept_ids)
 

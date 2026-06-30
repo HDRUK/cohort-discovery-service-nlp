@@ -103,8 +103,6 @@ def enrich_resolver(resolver, concepts):
     concept_ids = [c["concept_id"] for c in concepts]
     synonym_map = load_synonym_map(concept_ids)
     resolver.synonym_map = synonym_map
-    total_syns = sum(len(v) for v in synonym_map.values())
-    print(f"[Store] Loaded {total_syns} synonyms for {len(synonym_map)} concepts")
 
 
 def load_synonym_map(concept_ids: List[int]) -> Dict[int, List[str]]:
@@ -134,6 +132,8 @@ def load_synonym_map(concept_ids: List[int]) -> Dict[int, List[str]]:
         for row in cursor.fetchall():
             if row.get("concept_synonym_name"):
                 result.setdefault(int(row["concept_id"]), []).append(row["concept_synonym_name"].lower())
+        total_syns = sum(len(v) for v in result.values())
+        print(f"[Store] Loaded {total_syns} synonyms for {len(result)} concepts")
         return result
     except Exception as e:
         print(f"[Start-up] Failed to load synonym map: {e}")

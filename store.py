@@ -52,3 +52,7 @@ class ResolverStore:
             self._concepts = concepts
             self._resolver = resolver
             self._loaded_at = time.monotonic()
+
+    @property
+    def synonym_map(self) -> Dict[int, List[Any]]:
+        return self._resolver.synonym_map if self._resolver else {}

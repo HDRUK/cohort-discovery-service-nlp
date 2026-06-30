@@ -2,6 +2,7 @@ from rapidfuzz import fuzz
 import math
 import os
 import re
+from typing import Dict, List
 
 DOWNSTREAM_TOKENS = {
     "due", "secondary", "complication", "associated",
@@ -98,6 +99,7 @@ class FuzzyConceptResolver:
         self.fuzzy_token_overlap = os.getenv("FUZZY_TOKEN_OVERLAP", "true").lower() in {"1", "true", "yes", "on"}
         self.fuzzy_token_min_score = int(os.getenv("FUZZY_TOKEN_MIN_SCORE", 85))
         self.collection_boost_weight = float(os.getenv("COLLECTION_BOOST_WEIGHT", 1.5))
+        self.synonym_map: Dict[int, List[str]] = {}
         self.max_matches = None
         raw_max_matches = int(os.getenv("RESOLVER_MAX_MATCHES", 5))
         if raw_max_matches:
