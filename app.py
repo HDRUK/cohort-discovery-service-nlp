@@ -16,6 +16,24 @@ from rules_engine import RuleEngine
 from store import ResolverStore
 
 
+class FallbackResolver:
+    """Wraps a primary resolver and falls back to a secondary when primary returns no matches."""
+
+    def __init__(self, primary, fallback):
+        self._primary = primary
+        self._fallback = fallback
+
+    @property
+    def acronym_index(self):
+        return getattr(self._primary, "acronym_index", {})
+
+    def resolve(self, text, threshold, *, phrase_first=True, max_matches=None):
+        results = self._primary.resolve(text, threshold, phrase_first=phrase_first, max_matches=max_matches)
+        if not results:
+            results = self._fallback.resolve(text, threshold, phrase_first=phrase_first, max_matches=max_matches)
+        return results
+
+
 # Load environment variables
 load_dotenv()
 
@@ -251,10 +269,11 @@ async def extract_entities(
         resolver = await store.get_resolver()
     else:
         db_config = getattr(request.app.state, "db_config", None) or DB_CONFIG
-        store_resolver = await store.get_resolver()
-        synonym_map = getattr(store_resolver, "synonym_map", {})
-        resolver = MySQLConceptResolver(db_config, synonym_map=synonym_map)
-        resolver.acronym_index = getattr(store_resolver, "acronym_index", {})
+        fuzzy_resolver = await store.get_resolver()
+        synonym_map = getattr(fuzzy_resolver, "synonym_map", {})
+        sql_resolver = MySQLConceptResolver(db_config, synonym_map=synonym_map)
+        sql_resolver.acronym_index = getattr(fuzzy_resolver, "acronym_index", {})
+        resolver = FallbackResolver(sql_resolver, fuzzy_resolver)
 
     ret_value = PARSER.extract(payload.query, threshold, phrase_first, resolver, max_matches=max_matches)
 

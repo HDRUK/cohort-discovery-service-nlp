@@ -16,6 +16,24 @@ CONCEPT_MATCH_SCORE_EXACT = int(os.getenv("CONCEPT_MATCH_SCORE_EXACT", 1000))
 CONCEPT_MATCH_SCORE_CONTAINS = int(os.getenv("CONCEPT_MATCH_SCORE_CONTAINS", 500))
 CONCEPT_MATCH_SCORE_PREFIX = int(os.getenv("CONCEPT_MATCH_SCORE_PREFIX", 100))
 CONCEPT_MATCH_SCORE_SYNONYM = int(os.getenv("CONCEPT_MATCH_SCORE_SYNONYM", 1000))
+CONCEPT_MATCH_SCORE_TOKEN = int(os.getenv("CONCEPT_MATCH_SCORE_TOKEN", 50))
+
+_MEDCAT_TOKEN_STOPWORDS = {
+    "disorder", "disorders", "syndrome", "syndromes", "condition", "conditions",
+    "secondary", "unspecified", "associated", "including", "specified",
+}
+
+
+def _extract_medcat_tokens(terms: List[str], min_len: int = 8) -> List[str]:
+    """Extract distinctive long words from MedCAT expansion terms for fallback token matching."""
+    seen: set = set()
+    tokens = []
+    for term in terms:
+        for word in re.sub(r"[^a-zA-Z]", " ", term).lower().split():
+            if len(word) >= min_len and word not in _MEDCAT_TOKEN_STOPWORDS and word not in seen:
+                seen.add(word)
+                tokens.append(word)
+    return tokens
 
 
 class ConceptSearchRequest(BaseModel):
@@ -148,6 +166,10 @@ def build_where_conditions(
         conditions.append("d.description LIKE %s")
         bindings.append(f"%{normalised}%")
 
+    for token in _extract_medcat_tokens(medcat_names):
+        conditions.append("d.description LIKE %s")
+        bindings.append(f"%{token}%")
+
     if synonym_concept_ids:
         placeholders = ", ".join(["%s"] * len(synonym_concept_ids))
         conditions.append(f"d.concept_id IN ({placeholders})")
@@ -199,6 +221,12 @@ def build_score_sql(
         )
         bindings.append(f"%{normalised}%")
         bindings.append(f"{normalised}%")
+
+    for token in _extract_medcat_tokens(medcat_names):
+        clauses.append(
+            f"CASE WHEN LOWER(d.description) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_TOKEN} ELSE 0 END"
+        )
+        bindings.append(f"%{token}%")
 
     for cid in concept_ids:
         clauses.append(
