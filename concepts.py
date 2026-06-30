@@ -123,6 +123,7 @@ def build_where_conditions(
     concept_ids: list,
     concept_names: list,
     medcat_names: list,
+    synonym_concept_ids: Optional[List[int]] = None,
 ) -> tuple:
     conditions: List[str] = []
     bindings: List[Any] = []
@@ -147,6 +148,11 @@ def build_where_conditions(
         conditions.append("d.description LIKE %s")
         bindings.append(f"%{normalised}%")
 
+    if synonym_concept_ids:
+        placeholders = ", ".join(["%s"] * len(synonym_concept_ids))
+        conditions.append(f"d.concept_id IN ({placeholders})")
+        bindings.extend(synonym_concept_ids)
+
     return conditions, bindings
 
 
@@ -154,6 +160,7 @@ def build_score_sql(
     concept_names: list,
     medcat_names: list,
     concept_ids: list,
+    synonym_concept_ids: Optional[List[int]] = None,
 ) -> tuple:
     clauses: List[str] = []
     bindings: List[Any] = []
@@ -203,6 +210,13 @@ def build_score_sql(
             """
         )
         bindings.append(cid)
+
+    if synonym_concept_ids:
+        placeholders = ", ".join(["%s"] * len(synonym_concept_ids))
+        clauses.append(
+            f"CASE WHEN d.concept_id IN ({placeholders}) THEN {CONCEPT_MATCH_SCORE_SYNONYM} ELSE 0 END"
+        )
+        bindings.extend(synonym_concept_ids)
 
     score_sql = "(" + " + ".join(clauses) + ")" if clauses else "0"
     return score_sql, bindings
@@ -256,53 +270,31 @@ def search_concepts(
 
     medcat_names = _get_medcat_names(payload.concept_name or [])
 
+    syn_t0 = time.time()
+    syn_concept_ids = find_synonym_concept_ids(
+        request.app.state.resolver_store.synonym_map,
+        (payload.concept_name or []) + medcat_names,
+    )
+    print(f"[Concepts] synonym lookup: {(time.time() - syn_t0) * 1000:.1f}ms concept_ids={syn_concept_ids}")
+
     search_conditions, search_bindings = build_where_conditions(
         payload.concept_id or [],
         payload.concept_name or [],
         medcat_names,
+        syn_concept_ids,
     )
-
-    # --- SYNONYM SEARCH (in-memory, pre-loaded at startup) ---
-    store = request.app.state.resolver_store
-    synonym_map: Dict[int, List[str]] = store.synonym_map
-    syn_t0 = time.time()
-    syn_concept_ids = find_synonym_concept_ids(
-        synonym_map, (payload.concept_name or []) + medcat_names
-    )
-    print(
-        f"[Concepts] synonym lookup: {(time.time() - syn_t0) * 1000:.1f}ms concept_ids={syn_concept_ids}"
-    )
-
-    syn_where_conds: List[str] = []
-    syn_where_bindings: List[Any] = []
-    syn_score_parts: List[str] = []
-    syn_score_bindings: List[Any] = []
-
-    if syn_concept_ids:
-        placeholders = ", ".join(["%s"] * len(syn_concept_ids))
-        syn_where_conds.append(f"d.concept_id IN ({placeholders})")
-        syn_where_bindings.extend(syn_concept_ids)
-        syn_score_parts.append(
-            f"CASE WHEN d.concept_id IN ({placeholders}) THEN {CONCEPT_MATCH_SCORE_SYNONYM} ELSE 0 END"
-        )
-        syn_score_bindings.extend(syn_concept_ids)
-
-    all_search_conditions = search_conditions + syn_where_conds
-    if all_search_conditions:
-        where.append("(" + " OR ".join(all_search_conditions) + ")")
-        where_bindings.extend(search_bindings + syn_where_bindings)
-
-    where_clause = " AND ".join(where)
-
-    # --- SCORE SQL ---
     score_sql, score_bindings = build_score_sql(
         payload.concept_name or [],
         medcat_names,
         payload.concept_id or [],
+        syn_concept_ids,
     )
 
-    if syn_score_parts:
-        score_sql = f"{score_sql} + {' + '.join(syn_score_parts)}"
+    if search_conditions:
+        where.append("(" + " OR ".join(search_conditions) + ")")
+        where_bindings.extend(search_bindings)
+
+    where_clause = " AND ".join(where)
 
     # --- Children ---
     if payload.include_ancestors:
@@ -378,9 +370,7 @@ def search_concepts(
         LIMIT %s OFFSET %s
     """
 
-    final_bindings = (
-        score_bindings + syn_score_bindings + where_bindings + [per_page, offset]
-    )
+    final_bindings = score_bindings + where_bindings + [per_page, offset]
 
     conn = mysql.connector.connect(**db_config)
     try:
