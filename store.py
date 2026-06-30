@@ -45,7 +45,7 @@ class ResolverStore:
 
             if self._postprocess:
                 try:
-                    self._postprocess(resolver, concepts)
+                    await asyncio.to_thread(self._postprocess, resolver, concepts)
                 except Exception as exc:
                     print(f"[ResolverStore] Postprocess failed: {exc}")
 

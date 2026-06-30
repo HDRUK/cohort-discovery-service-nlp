@@ -2,6 +2,7 @@ import json
 import math
 import os
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -86,6 +87,28 @@ def _get_medcat_names(terms: List[str]) -> List[str]:
         except Exception as e:
             print(f"[MedCAT] term={term!r} — error: {e}")
     return pretty_names
+
+
+LOG_MATCHES = os.getenv("LOG_RESOLVER_MATCHES", "false").lower() == "true"
+
+
+def find_synonym_concept_ids(
+    synonym_map: Dict[int, List[str]], terms: List[str]
+) -> List[int]:
+    """Return concept_ids whose synonyms contain all tokens from any of the given terms (word-boundary match)."""
+    matched: set = set()
+    for term in terms:
+        term = term.strip()
+        if not term:
+            continue
+        tokens = term.lower().split()
+        for concept_id, synonyms in synonym_map.items():
+            for syn in synonyms:
+                syn_words = set(syn.split())
+                if all(tok in syn_words for tok in tokens):
+                    matched.add(concept_id)
+                    break
+    return list(matched)
 
 
 def _normalise_for_like(term: str, strip_s: bool = False) -> str:
@@ -211,6 +234,7 @@ def _parse_row(row: dict, include_ancestors: bool) -> "ConceptSearchResult":
 @router.post("/concepts/search", response_model=ConceptSearchResponse)
 def search_concepts(
     payload: ConceptSearchRequest,
+    request: Request,
     db_config: Dict[str, Any] = Depends(_get_db_config),
 ) -> ConceptSearchResponse:
     per_page = min(max(1, payload.per_page), 100)
@@ -238,9 +262,30 @@ def search_concepts(
         medcat_names,
     )
 
-    if search_conditions:
-        where.append("(" + " OR ".join(search_conditions) + ")")
-        where_bindings.extend(search_bindings)
+    # --- SYNONYM SEARCH (in-memory, pre-loaded at startup) ---
+    store = request.app.state.resolver_store
+    store_resolver = store._resolver
+    synonym_map: Dict[int, List[str]] = getattr(store_resolver, "synonym_map", {}) if store_resolver else {}
+    syn_t0 = time.time()
+    syn_concept_ids = find_synonym_concept_ids(synonym_map, (payload.concept_name or []) + medcat_names)
+    print(f"[Concepts] synonym lookup: {(time.time() - syn_t0) * 1000:.1f}ms concept_ids={syn_concept_ids}")
+
+    syn_where_conds: List[str] = []
+    syn_where_bindings: List[Any] = []
+    syn_score_parts: List[str] = []
+    syn_score_bindings: List[Any] = []
+
+    if syn_concept_ids:
+        placeholders = ", ".join(["%s"] * len(syn_concept_ids))
+        syn_where_conds.append(f"d.concept_id IN ({placeholders})")
+        syn_where_bindings.extend(syn_concept_ids)
+        syn_score_parts.append(f"CASE WHEN d.concept_id IN ({placeholders}) THEN 500 ELSE 0 END")
+        syn_score_bindings.extend(syn_concept_ids)
+
+    all_search_conditions = search_conditions + syn_where_conds
+    if all_search_conditions:
+        where.append("(" + " OR ".join(all_search_conditions) + ")")
+        where_bindings.extend(search_bindings + syn_where_bindings)
 
     where_clause = " AND ".join(where)
 
@@ -250,6 +295,9 @@ def search_concepts(
         medcat_names,
         payload.concept_id or [],
     )
+
+    if syn_score_parts:
+        score_sql = f"{score_sql} + {' + '.join(syn_score_parts)}"
 
     # --- Children ---
     if payload.include_ancestors:
@@ -325,13 +373,18 @@ def search_concepts(
         LIMIT %s OFFSET %s
     """
 
-    final_bindings = score_bindings + where_bindings + [per_page, offset]
+    final_bindings = score_bindings + syn_score_bindings + where_bindings + [per_page, offset]
 
     conn = mysql.connector.connect(**db_config)
     try:
         cursor = conn.cursor(dictionary=True)
+        main_t0 = time.time()
         cursor.execute(sql, final_bindings)
         rows = cursor.fetchall()
+        print(f"[Concepts] main query: {(time.time() - main_t0) * 1000:.1f}ms synonym_ids={syn_concept_ids} results={len(rows)}")
+        if LOG_MATCHES:
+            for row in rows[:5]:
+                print(f"[Concepts]   concept_id={row['concept_id']} name={row.get('name', '')!r} score={row.get('match_score')}")
     finally:
         conn.close()
 

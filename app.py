@@ -31,6 +31,10 @@ DB_CONFIG = {
     "port": int(os.getenv("DB_PORT", 3306)),
 }
 
+# OMOP vocabulary DB — may differ from the app DB (e.g. concept_synonym lives here).
+# Falls back to DB_NAME if OMOP_DB_NAME is not set.
+OMOP_DB_CONFIG = {**DB_CONFIG, "database": os.getenv("OMOP_DB_NAME", os.getenv("DB_NAME"))}
+
 VIEW_NAME = os.getenv("OMOP_VIEW", "distribution_concepts")
 DEFAULT_THRESHOLD = int(os.getenv("DEFAULT_THRESHOLD", 90))
 
@@ -96,6 +100,46 @@ def load_concepts_from_mysql():
 
 def enrich_resolver(resolver, concepts):
     resolver.acronym_index = ENGINE.build_acronym_index(concepts)
+    concept_ids = [c["concept_id"] for c in concepts]
+    synonym_map = load_synonym_map(concept_ids)
+    resolver.synonym_map = synonym_map
+    total_syns = sum(len(v) for v in synonym_map.values())
+    print(f"[Store] Loaded {total_syns} synonyms for {len(synonym_map)} concepts")
+
+
+def load_synonym_map(concept_ids: List[int]) -> Dict[int, List[str]]:
+    """Load synonyms for the given concept_ids from concept_synonym, keyed by concept_id.
+
+    Bounded by the distribution view concept set so we never scan the full table.
+    Returns {} if the table doesn't exist or on any error.
+    """
+    if not concept_ids:
+        return {}
+    conn = mysql.connector.connect(**OMOP_DB_CONFIG)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SHOW TABLES LIKE 'concept_synonym'")
+        exists = cursor.fetchone()
+        cursor.close()
+        if not exists:
+            print("[Start-up] concept_synonym table not found — synonym search disabled")
+            return {}
+        placeholders = ",".join(["%s"] * len(concept_ids))
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            f"SELECT concept_id, concept_synonym_name FROM concept_synonym WHERE concept_id IN ({placeholders})",
+            concept_ids,
+        )
+        result: Dict[int, List[str]] = {}
+        for row in cursor.fetchall():
+            if row.get("concept_synonym_name"):
+                result.setdefault(int(row["concept_id"]), []).append(row["concept_synonym_name"].lower())
+        return result
+    except Exception as e:
+        print(f"[Start-up] Failed to load synonym map: {e}")
+        return {}
+    finally:
+        conn.close()
 
 
 @asynccontextmanager
@@ -208,7 +252,8 @@ async def extract_entities(
     else:
         db_config = getattr(request.app.state, "db_config", None) or DB_CONFIG
         store_resolver = await store.get_resolver()
-        resolver = MySQLConceptResolver(db_config)
+        synonym_map = getattr(store_resolver, "synonym_map", {})
+        resolver = MySQLConceptResolver(db_config, synonym_map=synonym_map)
         resolver.acronym_index = getattr(store_resolver, "acronym_index", {})
 
     ret_value = PARSER.extract(payload.query, threshold, phrase_first, resolver, max_matches=max_matches)
