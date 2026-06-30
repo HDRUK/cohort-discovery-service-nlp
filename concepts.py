@@ -16,19 +16,20 @@ CONCEPT_MATCH_SCORE_PREFIX = int(os.getenv("CONCEPT_MATCH_SCORE_PREFIX", 100))
 CONCEPT_MATCH_SCORE_SYNONYM = int(os.getenv("CONCEPT_MATCH_SCORE_SYNONYM", 1000))
 CONCEPT_MATCH_SCORE_TOKEN = int(os.getenv("CONCEPT_MATCH_SCORE_TOKEN", 50))
 
-_MEDCAT_TOKEN_STOPWORDS = {
-    "disorder", "disorders", "syndrome", "syndromes", "condition", "conditions",
-    "secondary", "unspecified", "associated", "including", "specified",
-}
+_rules_path = os.getenv("RULES_PATH", "rules.json")
+with open(_rules_path) as _f:
+    _medcat_rules = json.load(_f).get("medcat", {})
+
+_MEDCAT_TOKEN_STOPWORDS = set(_medcat_rules.get("token_stopwords", []))
+_MEDCAT_TOKEN_MIN_LEN: int = _medcat_rules.get("token_min_len", 8)
 
 
-def _extract_medcat_tokens(terms: List[str], min_len: int = 8) -> List[str]:
-    """Extract distinctive long words from MedCAT expansion terms for fallback token matching."""
+def _extract_medcat_tokens(terms: List[str]) -> List[str]:
     seen: set = set()
     tokens = []
     for term in terms:
         for word in re.sub(r"[^a-zA-Z]", " ", term).lower().split():
-            if len(word) >= min_len and word not in _MEDCAT_TOKEN_STOPWORDS and word not in seen:
+            if len(word) >= _MEDCAT_TOKEN_MIN_LEN and word not in _MEDCAT_TOKEN_STOPWORDS and word not in seen:
                 seen.add(word)
                 tokens.append(word)
     return tokens
