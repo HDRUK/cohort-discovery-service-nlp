@@ -263,6 +263,15 @@ async def extract_entities(
     max_matches: Optional[int] = Query(
         None, ge=1, description="Max concept matches per entity (defaults to RESOLVER_MAX_MATCHES)"
     ),
+    use_stats_ordering: bool = Query(
+        False, description="Order concept matches by ncollections/count"
+    ),
+    use_collection_filter: bool = Query(
+        False, description="Restrict concept matches to the given collection_ids"
+    ),
+    collection_ids: Optional[List[int]] = Query(
+        None, description="Collection IDs to filter when use_collection_filter=true"
+    ),
     store: ResolverStore = Depends(get_resolver_store),
 ):
     """
@@ -274,7 +283,16 @@ async def extract_entities(
         resolver = await store.get_resolver()
     else:
         fuzzy_resolver = await store.get_resolver()
-        resolver = FallbackResolver(request.app.state.sql_resolver, fuzzy_resolver)
+        shared = request.app.state.sql_resolver
+        sql_resolver = MySQLConceptResolver(
+            request.app.state.db_config,
+            synonym_map=shared._synonym_map,
+            use_stats_ordering=use_stats_ordering,
+            use_collection_filter=use_collection_filter,
+            collection_ids=list(collection_ids) if collection_ids else [],
+        )
+        sql_resolver.acronym_index = shared.acronym_index
+        resolver = FallbackResolver(sql_resolver, fuzzy_resolver)
 
     ret_value = PARSER.extract(payload.query, threshold, phrase_first, resolver, max_matches=max_matches)
 

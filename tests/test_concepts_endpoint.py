@@ -363,3 +363,65 @@ def test_medcat_url_not_set_does_not_crash(monkeypatch):
     _sql, bindings = conn.cursor.return_value.execute.call_args[0]
     str_bindings = [b for b in bindings if isinstance(b, str)]
     assert any("ckd" in b.lower() for b in str_bindings)
+
+
+def test_stats_ordering_affects_result_order():
+    """Results ordered by ncollections/count when flag is set vs match_score only when not."""
+    rows_stats = [
+        _make_row(2, "Diabetes mellitus type 2", "Condition", 500, 10, 1000, cnt=2),
+        _make_row(1, "Diabetes", "Condition", 500, 1, 5, cnt=2),
+    ]
+    rows_default = [
+        _make_row(1, "Diabetes", "Condition", 500, 1, 5, cnt=2),
+        _make_row(2, "Diabetes mellitus type 2", "Condition", 500, 10, 1000, cnt=2),
+    ]
+
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn(rows_stats)):
+        resp_stats = client.post(
+            "/concepts/search",
+            json={"concept_name": ["diabetes"], "use_stats_ordering": True, "include_ancestors": False},
+        )
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn(rows_default)):
+        resp_default = client.post(
+            "/concepts/search",
+            json={"concept_name": ["diabetes"], "use_stats_ordering": False, "include_ancestors": False},
+        )
+
+    assert resp_stats.json()["data"][0]["concept_id"] == 2
+    assert resp_default.json()["data"][0]["concept_id"] == 1
+
+
+def test_collection_filter_restricts_results():
+    conn = _mock_conn([_make_row(1, "Diabetes", "Condition", 500, 2, 100, cnt=1)])
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=conn):
+        response = client.post(
+            "/concepts/search",
+            json={
+                "concept_name": ["diabetes"],
+                "collection_ids": [3, 7],
+                "use_collection_filter": True,
+                "include_ancestors": False,
+            },
+        )
+
+    assert response.status_code == 200
+    sql, bindings = conn.cursor.return_value.execute.call_args[0]
+    assert "d.collection_id IN" in sql
+    assert 3 in bindings
+    assert 7 in bindings
+
+
+def test_multiple_collection_ids_all_in_bindings():
+    conn = _mock_conn([])
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=conn):
+        client.post(
+            "/concepts/search",
+            json={
+                "collection_ids": [1, 2, 3],
+                "use_collection_filter": True,
+                "include_ancestors": False,
+            },
+        )
+
+    _sql, bindings = conn.cursor.return_value.execute.call_args[0]
+    assert all(cid in bindings for cid in [1, 2, 3])
