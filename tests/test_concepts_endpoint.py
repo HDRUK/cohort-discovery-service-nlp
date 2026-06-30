@@ -12,6 +12,12 @@ try:
 except AttributeError:
     app.state.db_config = {}
 
+try:
+    app.state.sql_resolver
+except AttributeError:
+    from mysql_concept_resolver import MySQLConceptResolver
+    app.state.sql_resolver = MySQLConceptResolver({})
+
 
 def _make_row(concept_id, name, category, match_score, ncollections, count, cnt=None, children=None):
     return {
@@ -39,7 +45,7 @@ def test_search_by_concept_name_returns_matching_rows():
         _make_row(24006, "Sickle cell-hemoglobin C disease", "Condition", 500, 1, 10, cnt=2),
         _make_row(24007, "Sickle cell-thalassemia disease", "Condition", 500, 1, 5, cnt=2),
     ]
-    with patch("concepts.mysql.connector.connect", return_value=_mock_conn(rows)):
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn(rows)):
         response = client.post("/concepts/search", json={"concept_name": ["sickle"], "include_ancestors": False})
 
     assert response.status_code == 200
@@ -52,7 +58,7 @@ def test_search_by_concept_name_returns_matching_rows():
 
 def test_search_by_concept_id_returns_exact_match():
     rows = [_make_row(24006, "Sickle cell-hemoglobin C disease", "Condition", 1000, 1, 10, cnt=1)]
-    with patch("concepts.mysql.connector.connect", return_value=_mock_conn(rows)):
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn(rows)):
         response = client.post("/concepts/search", json={"concept_id": [24006], "include_ancestors": False})
 
     assert response.status_code == 200
@@ -65,7 +71,7 @@ def test_search_by_concept_id_returns_exact_match():
 def test_domain_filter_is_forwarded():
     rows = [_make_row(3027018, "Heart rate", "Measurement", 0, 1, 20, cnt=1)]
     conn = _mock_conn(rows)
-    with patch("concepts.mysql.connector.connect", return_value=conn) as mock_connect:
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=conn) as mock_connect:
         response = client.post("/concepts/search", json={"domain": "Measurement", "include_ancestors": False})
 
     assert response.status_code == 200
@@ -83,7 +89,7 @@ def test_domain_filter_is_forwarded():
 def test_collection_filter_applied_when_flag_set():
     rows = [_make_row(3027018, "Heart rate", "Measurement", 0, 1, 20, cnt=1)]
     conn = _mock_conn(rows)
-    with patch("concepts.mysql.connector.connect", return_value=conn):
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=conn):
         response = client.post(
             "/concepts/search",
             json={
@@ -103,7 +109,7 @@ def test_collection_filter_applied_when_flag_set():
 def test_collection_filter_not_applied_when_flag_false():
     rows = [_make_row(3027018, "Heart rate", "Measurement", 0, 1, 20, cnt=1)]
     conn = _mock_conn(rows)
-    with patch("concepts.mysql.connector.connect", return_value=conn):
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=conn):
         response = client.post(
             "/concepts/search",
             json={
@@ -122,7 +128,7 @@ def test_collection_filter_not_applied_when_flag_false():
 def test_stats_ordering_included_when_flag_set():
     rows = [_make_row(1, "Diabetes", "Condition", 0, 1, 10, cnt=1)]
     conn = _mock_conn(rows)
-    with patch("concepts.mysql.connector.connect", return_value=conn):
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=conn):
         response = client.post(
             "/concepts/search",
             json={"use_stats_ordering": True, "include_ancestors": False},
@@ -138,7 +144,7 @@ def test_stats_ordering_included_when_flag_set():
 def test_stats_ordering_excluded_when_flag_false():
     rows = [_make_row(1, "Diabetes", "Condition", 0, 1, 10, cnt=1)]
     conn = _mock_conn(rows)
-    with patch("concepts.mysql.connector.connect", return_value=conn):
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=conn):
         response = client.post(
             "/concepts/search",
             json={"use_stats_ordering": False, "include_ancestors": False},
@@ -155,7 +161,7 @@ def test_no_search_params_returns_all_rows():
         _make_row(1, "Concept A", "Condition", 0, 1, 10, cnt=2),
         _make_row(2, "Concept B", "Measurement", 0, 1, 5, cnt=2),
     ]
-    with patch("concepts.mysql.connector.connect", return_value=_mock_conn(rows)):
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn(rows)):
         response = client.post("/concepts/search", json={"include_ancestors": False})
 
     assert response.status_code == 200
@@ -169,7 +175,7 @@ def test_pagination_slices_correctly():
         _make_row(24007, "Sickle cell-thalassemia disease", "Condition", 0, 1, 5, cnt=4),
         _make_row(24006, "Sickle cell-hemoglobin C disease", "Condition", 0, 1, 10, cnt=4),
     ]
-    with patch("concepts.mysql.connector.connect", return_value=_mock_conn(rows)):
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn(rows)):
         response = client.post(
             "/concepts/search",
             json={"page": 2, "per_page": 2, "include_ancestors": False},
@@ -187,7 +193,7 @@ def test_pagination_slices_correctly():
 def test_include_ancestors_false_skips_children_join():
     rows = [_make_row(1, "Diabetes", "Condition", 0, 1, 10, cnt=1)]
     conn = _mock_conn(rows)
-    with patch("concepts.mysql.connector.connect", return_value=conn):
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=conn):
         response = client.post("/concepts/search", json={"include_ancestors": False})
 
     assert response.status_code == 200
@@ -211,7 +217,7 @@ def test_include_ancestors_true_attaches_children():
             "children": '[{"concept_id": 99, "name": "Child concept", "category": "Condition"}]',
         }
     ]
-    with patch("concepts.mysql.connector.connect", return_value=_mock_conn(rows)):
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn(rows)):
         response = client.post(
             "/concepts/search",
             json={"concept_id": [320128], "include_ancestors": True},
@@ -236,7 +242,7 @@ def test_children_null_entries_are_filtered():
             "children": '[{"concept_id": 99, "name": "Child", "category": "Condition"}, null]',
         }
     ]
-    with patch("concepts.mysql.connector.connect", return_value=_mock_conn(rows)):
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn(rows)):
         response = client.post(
             "/concepts/search",
             json={"concept_id": [320128], "include_ancestors": True},
@@ -251,7 +257,7 @@ def test_separator_variants_match_via_normalisation():
     """Non-alphanumeric separators are replaced with % in the LIKE pattern."""
     conn = _mock_conn([])
     conn.cursor.return_value.fetchall.return_value = []
-    with patch("concepts.mysql.connector.connect", return_value=conn):
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=conn):
         response = client.post(
             "/concepts/search",
             json={"concept_name": ["sickle cell-hemoglobin"], "include_ancestors": False},
@@ -266,7 +272,7 @@ def test_separator_variants_match_via_normalisation():
 
 
 def test_empty_rows_returns_zero_total():
-    with patch("concepts.mysql.connector.connect", return_value=_mock_conn([])):
+    with patch("mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn([])):
         response = client.post("/concepts/search", json={"concept_name": ["xyz_no_match"], "include_ancestors": False})
 
     assert response.status_code == 200
@@ -302,7 +308,7 @@ def test_medcat_expansion_augments_search_terms(monkeypatch):
 
     conn = _mock_conn([])
     with (
-        patch("concepts.mysql.connector.connect", return_value=conn),
+        patch("mysql_concept_resolver.mysql.connector.connect", return_value=conn),
         patch("concepts.httpx.post", return_value=_medcat_response("Chronic Kidney Diseases")),
     ):
         response = client.post(
@@ -325,7 +331,7 @@ def test_medcat_unavailable_falls_back_to_original(monkeypatch):
 
     conn = _mock_conn([])
     with (
-        patch("concepts.mysql.connector.connect", return_value=conn),
+        patch("mysql_concept_resolver.mysql.connector.connect", return_value=conn),
         patch("concepts.httpx.post", side_effect=ConnectionError("unreachable")),
     ):
         response = client.post(
@@ -345,7 +351,7 @@ def test_medcat_url_not_set_does_not_crash(monkeypatch):
 
     conn = _mock_conn([])
     with (
-        patch("concepts.mysql.connector.connect", return_value=conn),
+        patch("mysql_concept_resolver.mysql.connector.connect", return_value=conn),
         patch("concepts.httpx.post", side_effect=Exception("should not be called")),
     ):
         response = client.post(

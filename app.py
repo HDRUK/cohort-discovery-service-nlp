@@ -116,13 +116,6 @@ def load_concepts_from_mysql():
     return concepts
 
 
-def enrich_resolver(resolver, concepts):
-    resolver.acronym_index = ENGINE.build_acronym_index(concepts)
-    concept_ids = [c["concept_id"] for c in concepts]
-    synonym_map = load_synonym_map(concept_ids)
-    resolver.synonym_map = synonym_map
-
-
 def load_synonym_map(concept_ids: List[int]) -> Dict[int, List[str]]:
     """Load synonyms for the given concept_ids from concept_synonym, keyed by concept_id.
 
@@ -163,6 +156,18 @@ def load_synonym_map(concept_ids: List[int]) -> Dict[int, List[str]]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.db_config = DB_CONFIG
+
+    sql_resolver = MySQLConceptResolver(DB_CONFIG)
+    app.state.sql_resolver = sql_resolver
+
+    def enrich_resolver(resolver, concepts):
+        resolver.acronym_index = ENGINE.build_acronym_index(concepts)
+        concept_ids = [c["concept_id"] for c in concepts]
+        synonym_map = load_synonym_map(concept_ids)
+        resolver.synonym_map = synonym_map
+        sql_resolver._synonym_map = synonym_map
+        sql_resolver.acronym_index = resolver.acronym_index
+
     store = ResolverStore(
         load_concepts_from_mysql,
         ttl_seconds=STORE_REFRESH_TTL,
@@ -268,12 +273,8 @@ async def extract_entities(
     if RESOLVER_BACKEND == "fuzzy":
         resolver = await store.get_resolver()
     else:
-        db_config = getattr(request.app.state, "db_config", None) or DB_CONFIG
         fuzzy_resolver = await store.get_resolver()
-        synonym_map = getattr(fuzzy_resolver, "synonym_map", {})
-        sql_resolver = MySQLConceptResolver(db_config, synonym_map=synonym_map)
-        sql_resolver.acronym_index = getattr(fuzzy_resolver, "acronym_index", {})
-        resolver = FallbackResolver(sql_resolver, fuzzy_resolver)
+        resolver = FallbackResolver(request.app.state.sql_resolver, fuzzy_resolver)
 
     ret_value = PARSER.extract(payload.query, threshold, phrase_first, resolver, max_matches=max_matches)
 

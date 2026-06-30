@@ -2,12 +2,10 @@ import json
 import math
 import os
 import re
-import time
 from typing import Any, Dict, List, Optional
 
 import httpx
-import mysql.connector
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -71,9 +69,6 @@ class ConceptSearchResponse(BaseModel):
     last_page: int
     data: List[ConceptSearchResult]
 
-
-def _get_db_config(request: Request) -> Dict[str, Any]:
-    return request.app.state.db_config
 
 
 def _get_medcat_names(terms: List[str]) -> List[str]:
@@ -277,145 +272,25 @@ def _parse_row(row: dict, include_ancestors: bool) -> "ConceptSearchResult":
 def search_concepts(
     payload: ConceptSearchRequest,
     request: Request,
-    db_config: Dict[str, Any] = Depends(_get_db_config),
 ) -> ConceptSearchResponse:
     per_page = min(max(1, payload.per_page), 100)
     page = max(1, payload.page)
-    offset = (page - 1) * per_page
 
-    # --- WHERE clause ---
-    where = ["d.concept_id IS NOT NULL", "d.concept_id > 0"]
-    where_bindings: List[Any] = []
+    resolver = request.app.state.sql_resolver
 
-    if payload.use_collection_filter and payload.collection_ids:
-        placeholders = ", ".join(["%s"] * len(payload.collection_ids))
-        where.append(f"d.collection_id IN ({placeholders})")
-        where_bindings.extend(payload.collection_ids)
-
-    if payload.domain:
-        where.append("d.category = %s")
-        where_bindings.append(payload.domain.lower())
-
-    medcat_names = _get_medcat_names(payload.concept_name or [])
-
-    syn_t0 = time.time()
-    syn_concept_ids = find_synonym_concept_ids(
-        request.app.state.resolver_store.synonym_map,
-        (payload.concept_name or []) + medcat_names,
-    )
-    print(f"[Concepts] synonym lookup: {(time.time() - syn_t0) * 1000:.1f}ms concept_ids={syn_concept_ids}")
-
-    search_conditions, search_bindings = build_where_conditions(
-        payload.concept_id or [],
-        payload.concept_name or [],
-        medcat_names,
-        syn_concept_ids,
-    )
-    score_sql, score_bindings = build_score_sql(
-        payload.concept_name or [],
-        medcat_names,
-        payload.concept_id or [],
-        syn_concept_ids,
+    result = resolver.search(
+        concept_ids=payload.concept_id,
+        concept_names=payload.concept_name,
+        domain=payload.domain,
+        collection_ids=payload.collection_ids,
+        use_collection_filter=payload.use_collection_filter,
+        use_stats_ordering=payload.use_stats_ordering,
+        include_ancestors=payload.include_ancestors,
+        page=page,
+        per_page=per_page,
     )
 
-    if search_conditions:
-        where.append("(" + " OR ".join(search_conditions) + ")")
-        where_bindings.extend(search_bindings)
-
-    where_clause = " AND ".join(where)
-
-    # --- Children ---
-    if payload.include_ancestors:
-        children_join = """
-            LEFT JOIN concept_ancestors ca ON ca.parent_concept_id = base.concept_id
-            LEFT JOIN distributions dc ON dc.concept_id = ca.child_concept_id
-        """
-        children_select = """,
-            JSON_ARRAYAGG(
-                CASE WHEN dc.concept_id IS NOT NULL THEN
-                    JSON_OBJECT(
-                        'concept_id', dc.concept_id,
-                        'name', dc.description,
-                        'category', dc.category
-                    )
-                END
-            ) AS children
-        """
-    else:
-        children_join = ""
-        children_select = ""
-
-    # --- ORDER BY ---
-    if payload.use_stats_ordering:
-        order_by = """
-            ORDER BY
-                base.match_score DESC,
-                base.ncollections DESC,
-                base.count DESC,
-                CHAR_LENGTH(base.name) ASC,
-                base.concept_id
-        """
-    else:
-        order_by = """
-            ORDER BY
-                base.match_score DESC,
-                CHAR_LENGTH(base.name) ASC,
-                base.concept_id
-        """
-
-    sql = f"""
-        WITH base AS (
-            SELECT
-                d.concept_id,
-                d.description AS name,
-                d.category,
-                {score_sql} AS match_score,
-                COUNT(DISTINCT d.collection_id) AS ncollections,
-                SUM(d.count) AS count
-            FROM distributions d
-            WHERE {where_clause}
-            GROUP BY d.concept_id, d.description, d.category
-        ),
-        total AS (
-            SELECT COUNT(*) AS cnt FROM base
-        )
-        SELECT
-            base.*,
-            total.cnt
-            {children_select}
-        FROM base
-        CROSS JOIN total
-        {children_join}
-        GROUP BY
-            base.concept_id,
-            base.name,
-            base.category,
-            base.match_score,
-            base.ncollections,
-            base.count,
-            total.cnt
-        {order_by}
-        LIMIT %s OFFSET %s
-    """
-
-    final_bindings = score_bindings + where_bindings + [per_page, offset]
-
-    conn = mysql.connector.connect(**db_config)
-    try:
-        cursor = conn.cursor(dictionary=True)
-        main_t0 = time.time()
-        cursor.execute(sql, final_bindings)
-        rows = cursor.fetchall()
-        print(
-            f"[Concepts] main query: {(time.time() - main_t0) * 1000:.1f}ms synonym_ids={syn_concept_ids} results={len(rows)}"
-        )
-    finally:
-        conn.close()
-
-    total = int(rows[0]["cnt"]) if rows else 0
-
-    results = [_parse_row(row, payload.include_ancestors) for row in rows]
-
+    total = result["total"]
     last_page = max(1, math.ceil(total / per_page)) if per_page > 0 else 1
 
     return ConceptSearchResponse(
@@ -423,5 +298,5 @@ def search_concepts(
         per_page=per_page,
         current_page=page,
         last_page=last_page,
-        data=results,
+        data=[_parse_row(row, payload.include_ancestors) for row in result["data"]],
     )
