@@ -80,16 +80,19 @@ def _get_medcat_names(terms: List[str]) -> List[str]:
                     acc = ann.get("acc", 0)
                     status = ann.get("meta_anns", {}).get("Status", {}).get("value")
                     pretty_name = ann.get("pretty_name", "")
-                    accepted = acc >= min_acc and status == "Affirmed" and pretty_name.lower() not in term_set
-                    print(f"[MedCAT] term={term!r} pretty_name={pretty_name!r} acc={acc:.3f} status={status} accepted={accepted}")
+                    accepted = (
+                        acc >= min_acc
+                        and status == "Affirmed"
+                        and pretty_name.lower() not in term_set
+                    )
+                    print(
+                        f"[MedCAT] term={term!r} pretty_name={pretty_name!r} acc={acc:.3f} status={status} accepted={accepted}"
+                    )
                     if accepted:
                         pretty_names.append(pretty_name)
         except Exception as e:
             print(f"[MedCAT] term={term!r} — error: {e}")
     return pretty_names
-
-
-LOG_MATCHES = os.getenv("LOG_RESOLVER_MATCHES", "false").lower() == "true"
 
 
 def find_synonym_concept_ids(
@@ -230,7 +233,6 @@ def _parse_row(row: dict, include_ancestors: bool) -> "ConceptSearchResult":
     )
 
 
-
 @router.post("/concepts/search", response_model=ConceptSearchResponse)
 def search_concepts(
     payload: ConceptSearchRequest,
@@ -265,10 +267,16 @@ def search_concepts(
     # --- SYNONYM SEARCH (in-memory, pre-loaded at startup) ---
     store = request.app.state.resolver_store
     store_resolver = store._resolver
-    synonym_map: Dict[int, List[str]] = getattr(store_resolver, "synonym_map", {}) if store_resolver else {}
+    synonym_map: Dict[int, List[str]] = (
+        getattr(store_resolver, "synonym_map", {}) if store_resolver else {}
+    )
     syn_t0 = time.time()
-    syn_concept_ids = find_synonym_concept_ids(synonym_map, (payload.concept_name or []) + medcat_names)
-    print(f"[Concepts] synonym lookup: {(time.time() - syn_t0) * 1000:.1f}ms concept_ids={syn_concept_ids}")
+    syn_concept_ids = find_synonym_concept_ids(
+        synonym_map, (payload.concept_name or []) + medcat_names
+    )
+    print(
+        f"[Concepts] synonym lookup: {(time.time() - syn_t0) * 1000:.1f}ms concept_ids={syn_concept_ids}"
+    )
 
     syn_where_conds: List[str] = []
     syn_where_bindings: List[Any] = []
@@ -279,7 +287,9 @@ def search_concepts(
         placeholders = ", ".join(["%s"] * len(syn_concept_ids))
         syn_where_conds.append(f"d.concept_id IN ({placeholders})")
         syn_where_bindings.extend(syn_concept_ids)
-        syn_score_parts.append(f"CASE WHEN d.concept_id IN ({placeholders}) THEN 500 ELSE 0 END")
+        syn_score_parts.append(
+            f"CASE WHEN d.concept_id IN ({placeholders}) THEN 500 ELSE 0 END"
+        )
         syn_score_bindings.extend(syn_concept_ids)
 
     all_search_conditions = search_conditions + syn_where_conds
@@ -373,7 +383,9 @@ def search_concepts(
         LIMIT %s OFFSET %s
     """
 
-    final_bindings = score_bindings + syn_score_bindings + where_bindings + [per_page, offset]
+    final_bindings = (
+        score_bindings + syn_score_bindings + where_bindings + [per_page, offset]
+    )
 
     conn = mysql.connector.connect(**db_config)
     try:
@@ -381,10 +393,9 @@ def search_concepts(
         main_t0 = time.time()
         cursor.execute(sql, final_bindings)
         rows = cursor.fetchall()
-        print(f"[Concepts] main query: {(time.time() - main_t0) * 1000:.1f}ms synonym_ids={syn_concept_ids} results={len(rows)}")
-        if LOG_MATCHES:
-            for row in rows[:5]:
-                print(f"[Concepts]   concept_id={row['concept_id']} name={row.get('name', '')!r} score={row.get('match_score')}")
+        print(
+            f"[Concepts] main query: {(time.time() - main_t0) * 1000:.1f}ms synonym_ids={syn_concept_ids} results={len(rows)}"
+        )
     finally:
         conn.close()
 

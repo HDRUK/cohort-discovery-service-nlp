@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Optional
 import mysql.connector
 
 from concepts import (
-    LOG_MATCHES,
     _get_medcat_names,
     build_score_sql,
     build_where_conditions,
@@ -36,7 +35,9 @@ class MySQLConceptResolver:
 
         medcat_expansions = _get_medcat_names([text])
 
-        search_conds, search_bindings = build_where_conditions([], [text], medcat_expansions)
+        search_conds, search_bindings = build_where_conditions(
+            [], [text], medcat_expansions
+        )
         if not search_conds:
             return []
 
@@ -45,8 +46,12 @@ class MySQLConceptResolver:
         conn = mysql.connector.connect(**self._db_config)
         try:
             syn_t0 = time.time()
-            syn_concept_ids = find_synonym_concept_ids(self._synonym_map, [text] + medcat_expansions)
-            print(f"[Resolver] synonym lookup: {(time.time() - syn_t0) * 1000:.1f}ms concept_ids={syn_concept_ids}")
+            syn_concept_ids = find_synonym_concept_ids(
+                self._synonym_map, [text] + medcat_expansions
+            )
+            print(
+                f"[Resolver] synonym lookup: {(time.time() - syn_t0) * 1000:.1f}ms concept_ids={syn_concept_ids}"
+            )
 
             syn_where_conds: List[str] = []
             syn_where_bindings: List[Any] = []
@@ -57,7 +62,9 @@ class MySQLConceptResolver:
                 placeholders = ", ".join(["%s"] * len(syn_concept_ids))
                 syn_where_conds.append(f"d.concept_id IN ({placeholders})")
                 syn_where_bindings.extend(syn_concept_ids)
-                syn_score_parts.append(f"CASE WHEN d.concept_id IN ({placeholders}) THEN 500 ELSE 0 END")
+                syn_score_parts.append(
+                    f"CASE WHEN d.concept_id IN ({placeholders}) THEN 500 ELSE 0 END"
+                )
                 syn_score_bindings.extend(syn_concept_ids)
 
             all_where_conds = search_conds + syn_where_conds
@@ -86,16 +93,21 @@ class MySQLConceptResolver:
             """
 
             limit = max_matches if max_matches is not None else 5
-            bindings = score_bindings + syn_score_bindings + search_bindings + syn_where_bindings + [limit]
+            bindings = (
+                score_bindings
+                + syn_score_bindings
+                + search_bindings
+                + syn_where_bindings
+                + [limit]
+            )
 
             cursor = conn.cursor(dictionary=True)
             main_t0 = time.time()
             cursor.execute(sql, bindings)
             rows = cursor.fetchall()
-            print(f"[Resolver] main query: {(time.time() - main_t0) * 1000:.1f}ms synonym_ids={syn_concept_ids} results={len(rows)}")
-            if LOG_MATCHES:
-                for row in rows:
-                    print(f"[Resolver]   concept_id={row['concept_id']} name={row['description']!r} score={row['match_score']}")
+            print(
+                f"[Resolver] main query: {(time.time() - main_t0) * 1000:.1f}ms synonym_ids={syn_concept_ids} results={len(rows)}"
+            )
         finally:
             conn.close()
 
