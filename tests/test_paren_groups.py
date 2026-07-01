@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app import app
-from fuzzy_concept_resolver import FuzzyConceptResolver
+from resolvers import FuzzyConceptResolver
 
 
 class LocalResolverStore:

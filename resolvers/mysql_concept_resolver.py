@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 
 import mysql.connector
 
+from resolvers.base_resolver import BaseResolver
 from concepts import (
     _get_medcat_names,
     build_score_sql,
@@ -11,15 +12,10 @@ from concepts import (
 )
 
 
-class MySQLConceptResolver:
-    def __init__(
-        self,
-        db_config: Dict[str, Any],
-        synonym_map: Optional[Dict[int, List[str]]] = None,
-    ) -> None:
+class MySQLConceptResolver(BaseResolver):
+    def __init__(self, db_config: Dict[str, Any], store=None) -> None:
+        super().__init__(store)
         self._db_config = db_config
-        self._synonym_map: Dict[int, List[str]] = synonym_map or {}
-        self.acronym_index: Dict[str, List[str]] = {}
 
     def search(
         self,
@@ -41,7 +37,7 @@ class MySQLConceptResolver:
 
         syn_t0 = time.time()
         syn_concept_ids = find_synonym_concept_ids(
-            self._synonym_map, concept_names + medcat_names
+            self.synonym_map, concept_names + medcat_names
         )
         print(
             f"[Resolver] synonym lookup: {(time.time() - syn_t0) * 1000:.1f}ms concept_ids={syn_concept_ids}"

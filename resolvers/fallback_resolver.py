@@ -1,16 +1,14 @@
 from typing import List, Optional
 
+from resolvers.base_resolver import BaseResolver
 
-class FallbackResolver:
+
+class FallbackResolver(BaseResolver):
     """Wraps a primary resolver and falls back to the store's cached fuzzy resolver when primary returns no matches."""
 
     def __init__(self, primary, store):
+        super().__init__(store)
         self._primary = primary
-        self._store = store
-
-    @property
-    def acronym_index(self):
-        return getattr(self._primary, "acronym_index", {})
 
     def resolve(
         self,
@@ -22,6 +20,7 @@ class FallbackResolver:
         use_stats_ordering: bool = False,
         use_collection_filter: bool = False,
         collection_ids: Optional[List[int]] = None,
+        **kwargs,
     ):
         results = self._primary.resolve(
             text,
@@ -33,7 +32,7 @@ class FallbackResolver:
             collection_ids=collection_ids,
         )
         if not results:
-            fallback = self._store.resolver
+            fallback = self._store.resolver if self._store else None
             if fallback:
                 results = fallback.resolve(text, threshold, phrase_first=phrase_first, max_matches=max_matches)
         return results

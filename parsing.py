@@ -17,7 +17,7 @@ class QueryParser:
 
     def _get_acronym_index(self, resolver: Any) -> Dict[str, List[str]]:
         eager_index = getattr(resolver, "acronym_index", None)
-        if eager_index is not None:
+        if eager_index:
             return eager_index
         concepts = getattr(resolver, "concepts", None)
         if concepts is None:

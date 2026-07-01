@@ -4,6 +4,8 @@ import os
 import re
 from typing import Dict, List
 
+from resolvers.base_resolver import BaseResolver
+
 DOWNSTREAM_TOKENS = {
     "due", "secondary", "complication", "associated",
     "stage", "chronic",  "disease", "failure", "disorder"
@@ -48,7 +50,7 @@ def fuzzy_token_overlap(candidate_tokens, concept_tokens, min_score=90):
             matched += 1
     return matched / max(len(candidate_tokens), 1)
 
-class FuzzyConceptResolver:
+class FuzzyConceptResolver(BaseResolver):
     """
     Fuzzy matcher for resolving natural language text to standardised concepts.
     
@@ -89,6 +91,7 @@ class FuzzyConceptResolver:
         phrase_first : bool, optional
             If True, prefer phrase overlap for token ratio when available.
         """
+        super().__init__()
         self.threshold = threshold
         self.token_match_ratio = token_match_ratio
         self.extra_token_penalty = extra_token_penalty
@@ -99,7 +102,6 @@ class FuzzyConceptResolver:
         self.fuzzy_token_overlap = os.getenv("FUZZY_TOKEN_OVERLAP", "true").lower() in {"1", "true", "yes", "on"}
         self.fuzzy_token_min_score = int(os.getenv("FUZZY_TOKEN_MIN_SCORE", 85))
         self.collection_boost_weight = float(os.getenv("COLLECTION_BOOST_WEIGHT", 1.5))
-        self.synonym_map: Dict[int, List[str]] = {}
         self.max_matches = None
         raw_max_matches = int(os.getenv("RESOLVER_MAX_MATCHES", 5))
         if raw_max_matches:

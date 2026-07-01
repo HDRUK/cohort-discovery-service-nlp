@@ -1,7 +1,7 @@
 import asyncio
 import time
 from typing import Any, Dict, List, Optional, Callable
-from fuzzy_concept_resolver import FuzzyConceptResolver
+from resolvers.fuzzy_concept_resolver import FuzzyConceptResolver
 
 
 class ResolverStore:
@@ -9,7 +9,7 @@ class ResolverStore:
         self,
         loader: Callable[[], List[Dict[str, Any]]],
         ttl_seconds: int,
-        postprocess: Optional[Callable[[FuzzyConceptResolver, List[Dict[str, Any]]], None]] = None,
+        postprocess: Optional[Callable[["ResolverStore", List[Dict[str, Any]]], None]] = None,
     ):
         self._loader = loader
         self._ttl = ttl_seconds
@@ -18,8 +18,11 @@ class ResolverStore:
         self._refresh_task: Optional[asyncio.Task] = None
 
         self._loaded_at: float = 0.0
-        self._concepts: List[Dict[str, Any]] = []
         self._resolver: Optional[FuzzyConceptResolver] = None
+
+        # Shared data updated by postprocess on each refresh; read by all resolvers.
+        self.synonym_map: Dict[int, List[str]] = {}
+        self.acronym_index: Dict[str, List[str]] = {}
 
     async def get_resolver(self) -> FuzzyConceptResolver:
         now = time.monotonic()
@@ -43,20 +46,17 @@ class ResolverStore:
                 print(f"[ResolverStore] Refresh failed: {exc}")
                 return
 
+            resolver._store = self
+
             if self._postprocess:
                 try:
-                    await asyncio.to_thread(self._postprocess, resolver, concepts)
+                    await asyncio.to_thread(self._postprocess, self, concepts)
                 except Exception as exc:
                     print(f"[ResolverStore] Postprocess failed: {exc}")
 
-            self._concepts = concepts
             self._resolver = resolver
             self._loaded_at = time.monotonic()
 
     @property
     def resolver(self) -> Optional[FuzzyConceptResolver]:
         return self._resolver
-
-    @property
-    def synonym_map(self) -> Dict[int, List[Any]]:
-        return self._resolver.synonym_map if self._resolver else {}

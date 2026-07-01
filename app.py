@@ -10,9 +10,8 @@ from fastapi import Depends, FastAPI, Query, Request
 from pydantic import BaseModel
 
 from concepts import router as concepts_router
-from fallback_resolver import FallbackResolver
-from mysql_concept_resolver import MySQLConceptResolver
 from parsing import QueryParser
+from resolvers import FallbackResolver, MySQLConceptResolver
 from rules_engine import RuleEngine
 from store import ResolverStore
 from synonyms import load_synonym_map
@@ -111,15 +110,10 @@ def load_concepts_from_mysql():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.db_config = DB_CONFIG
-    app.state.sql_resolver = MySQLConceptResolver(DB_CONFIG)
 
-    def enrich_resolver(resolver, concepts):
-        resolver.acronym_index = ENGINE.build_acronym_index(concepts)
-        concept_ids = [c["concept_id"] for c in concepts]
-        synonym_map = load_synonym_map(OMOP_DB_CONFIG, concept_ids)
-        resolver.synonym_map = synonym_map
-        app.state.sql_resolver._synonym_map = synonym_map
-        app.state.sql_resolver.acronym_index = resolver.acronym_index
+    def enrich_resolver(store, concepts):
+        store.synonym_map = load_synonym_map(OMOP_DB_CONFIG, [c["concept_id"] for c in concepts])
+        store.acronym_index = ENGINE.build_acronym_index(concepts)
 
     store = ResolverStore(
         load_concepts_from_mysql,
@@ -128,6 +122,7 @@ async def lifespan(app: FastAPI):
     )
     resolver = await store.get_resolver()
     app.state.resolver_store = store
+    app.state.sql_resolver = MySQLConceptResolver(DB_CONFIG, store)
     app.state.fallback_resolver = FallbackResolver(app.state.sql_resolver, store)
     print(
         f"[Start-up] Loaded FuzzyConceptResolver (concepts={len(resolver.concepts)}) from `{VIEW_NAME}`"
@@ -265,8 +260,7 @@ async def list_acronyms(
     offset: int = Query(0, ge=0, description="Offset into the acronym list"),
     store: ResolverStore = Depends(get_resolver_store),
 ):
-    resolver = await store.get_resolver()
-    acronym_index = getattr(resolver, "acronym_index", {}) or {}
+    acronym_index = getattr(store, "acronym_index", {}) or {}
     entries = []
     for acronym, concepts in acronym_index.items():
         if prefix and not acronym.startswith(prefix.upper()):

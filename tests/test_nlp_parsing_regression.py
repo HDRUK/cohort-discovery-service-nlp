@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 import importlib
 
 from app import app
-from fuzzy_concept_resolver import FuzzyConceptResolver
+from resolvers import FuzzyConceptResolver
 import rules_engine
 
 

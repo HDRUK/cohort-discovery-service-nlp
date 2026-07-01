@@ -1,7 +1,8 @@
 import math
 import os
 import pytest
-from fuzzy_concept_resolver import FuzzyConceptResolver, normalise_text, tokenise
+from resolvers import FuzzyConceptResolver
+from resolvers.fuzzy_concept_resolver import normalise_text, tokenise
 
 
 # Helpers
