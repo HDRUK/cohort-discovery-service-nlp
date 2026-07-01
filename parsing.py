@@ -130,6 +130,7 @@ class QueryParser:
         resolver: Any,
         _skip_paren: bool = False,
         max_matches: Optional[int] = None,
+        **resolve_kwargs,
     ) -> Dict[str, Any]:
         paren_groups: List[Dict[str, Any]] = []
         paren_warnings: List[str] = []
@@ -427,7 +428,7 @@ class QueryParser:
 
             # Resolve concepts
             matches = resolver.resolve(
-                candidate_normalised, threshold, phrase_first=phrase_first, max_matches=max_matches
+                candidate_normalised, threshold, phrase_first=phrase_first, max_matches=max_matches, **resolve_kwargs
             )
             index = working_query.lower().find(candidate.lower())
 

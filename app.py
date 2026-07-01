@@ -10,49 +10,12 @@ from fastapi import Depends, FastAPI, Query, Request
 from pydantic import BaseModel
 
 from concepts import router as concepts_router
+from fallback_resolver import FallbackResolver
 from mysql_concept_resolver import MySQLConceptResolver
 from parsing import QueryParser
 from rules_engine import RuleEngine
 from store import ResolverStore
-
-
-class FallbackResolver:
-    """Wraps a primary resolver and falls back to a secondary when primary returns no matches."""
-
-    def __init__(
-        self,
-        primary,
-        fallback,
-        *,
-        use_stats_ordering: bool = False,
-        use_collection_filter: bool = False,
-        collection_ids: Optional[List[int]] = None,
-    ):
-        self._primary = primary
-        self._fallback = fallback
-        self._use_stats_ordering = use_stats_ordering
-        self._use_collection_filter = use_collection_filter
-        self._collection_ids: List[int] = collection_ids or []
-
-    @property
-    def acronym_index(self):
-        return getattr(self._primary, "acronym_index", {})
-
-    def resolve(self, text, threshold, *, phrase_first=True, max_matches=None):
-        results = self._primary.resolve(
-            text,
-            threshold,
-            phrase_first=phrase_first,
-            max_matches=max_matches,
-            use_stats_ordering=self._use_stats_ordering,
-            use_collection_filter=self._use_collection_filter,
-            collection_ids=self._collection_ids,
-        )
-        if not results:
-            results = self._fallback.resolve(
-                text, threshold, phrase_first=phrase_first, max_matches=max_matches
-            )
-        return results
+from synonyms import load_synonym_map
 
 
 # Load environment variables
@@ -144,46 +107,6 @@ def load_concepts_from_mysql():
     return concepts
 
 
-def load_synonym_map(concept_ids: List[int]) -> Dict[int, List[str]]:
-    """Load synonyms for the given concept_ids from concept_synonym, keyed by concept_id.
-
-    Bounded by the distribution view concept set so we never scan the full table.
-    Returns {} if the table doesn't exist or on any error.
-    """
-    if not concept_ids:
-        return {}
-    conn = mysql.connector.connect(**OMOP_DB_CONFIG)
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SHOW TABLES LIKE 'concept_synonym'")
-        exists = cursor.fetchone()
-        cursor.close()
-        if not exists:
-            print(
-                "[Start-up] concept_synonym table not found — synonym search disabled"
-            )
-            return {}
-        placeholders = ",".join(["%s"] * len(concept_ids))
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute(
-            f"SELECT concept_id, concept_synonym_name FROM concept_synonym WHERE concept_id IN ({placeholders})",
-            concept_ids,
-        )
-        result: Dict[int, List[str]] = {}
-        for row in cursor.fetchall():
-            if row.get("concept_synonym_name"):
-                result.setdefault(int(row["concept_id"]), []).append(
-                    row["concept_synonym_name"].lower()
-                )
-        total_syns = sum(len(v) for v in result.values())
-        print(f"[Store] Loaded {total_syns} synonyms for {len(result)} concepts")
-        return result
-    except Exception as e:
-        print(f"[Start-up] Failed to load synonym map: {e}")
-        return {}
-    finally:
-        conn.close()
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -193,7 +116,7 @@ async def lifespan(app: FastAPI):
     def enrich_resolver(resolver, concepts):
         resolver.acronym_index = ENGINE.build_acronym_index(concepts)
         concept_ids = [c["concept_id"] for c in concepts]
-        synonym_map = load_synonym_map(concept_ids)
+        synonym_map = load_synonym_map(OMOP_DB_CONFIG, concept_ids)
         resolver.synonym_map = synonym_map
         app.state.sql_resolver._synonym_map = synonym_map
         app.state.sql_resolver.acronym_index = resolver.acronym_index
@@ -205,6 +128,7 @@ async def lifespan(app: FastAPI):
     )
     resolver = await store.get_resolver()
     app.state.resolver_store = store
+    app.state.fallback_resolver = FallbackResolver(app.state.sql_resolver, store)
     print(
         f"[Start-up] Loaded FuzzyConceptResolver (concepts={len(resolver.concepts)}) from `{VIEW_NAME}`"
     )
@@ -307,19 +231,18 @@ async def extract_entities(
     """
     if RESOLVER_BACKEND == "fuzzy":
         resolver = await store.get_resolver()
+        ret_value = PARSER.extract(payload.query, threshold, phrase_first, resolver, max_matches=max_matches)
     else:
-        fuzzy_resolver = await store.get_resolver()
-        resolver = FallbackResolver(
-            request.app.state.sql_resolver,
-            fuzzy_resolver,
+        ret_value = PARSER.extract(
+            payload.query,
+            threshold,
+            phrase_first,
+            request.app.state.fallback_resolver,
+            max_matches=max_matches,
             use_stats_ordering=payload.use_stats_ordering,
             use_collection_filter=payload.use_collection_filter,
             collection_ids=list(payload.collection_ids) if payload.collection_ids else [],
         )
-
-    ret_value = PARSER.extract(
-        payload.query, threshold, phrase_first, resolver, max_matches=max_matches
-    )
 
     print(f"[Request] query='{payload.query}' => entities={ret_value}")
 

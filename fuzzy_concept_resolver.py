@@ -116,7 +116,7 @@ class FuzzyConceptResolver:
             c["tokens"] = unigrams
             c["phrase_tokens"] = phrases
 
-    def resolve(self, text, threshold=None, phrase_first=None, max_matches=None):
+    def resolve(self, text, threshold=None, phrase_first=None, max_matches=None, **kwargs):
         """
         Fuzzy match input text against concepts and return ranked matches.
         

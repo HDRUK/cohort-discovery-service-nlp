@@ -54,5 +54,9 @@ class ResolverStore:
             self._loaded_at = time.monotonic()
 
     @property
+    def resolver(self) -> Optional[FuzzyConceptResolver]:
+        return self._resolver
+
+    @property
     def synonym_map(self) -> Dict[int, List[Any]]:
         return self._resolver.synonym_map if self._resolver else {}
