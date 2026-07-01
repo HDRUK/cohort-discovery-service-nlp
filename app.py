@@ -175,6 +175,8 @@ async def lifespan(app: FastAPI):
     # by the /extract handler to initialise per-request MySQLConceptResolver instances.
     app.state.synonym_map = {}
     app.state.acronym_index = {}
+    # Singleton resolver used by POST /concepts/search (options passed per-call, not per-instance).
+    app.state.sql_resolver = MySQLConceptResolver(DB_CONFIG)
 
     def enrich_resolver(resolver, concepts):
         resolver.acronym_index = ENGINE.build_acronym_index(concepts)
@@ -183,6 +185,7 @@ async def lifespan(app: FastAPI):
         resolver.synonym_map = synonym_map
         app.state.synonym_map = synonym_map
         app.state.acronym_index = resolver.acronym_index
+        app.state.sql_resolver._synonym_map = synonym_map
 
     store = ResolverStore(
         load_concepts_from_mysql,
