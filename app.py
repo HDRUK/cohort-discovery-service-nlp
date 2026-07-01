@@ -78,6 +78,10 @@ def load_concepts_from_mysql():
 
     # Query execution phase
     query_start = time.time()
+    # refactor-candidate
+    # - we now have latest_distribution VIEW which is stratified on collection
+    # - we could use that and aggregate the result making this VIEW redundnant
+    #   and giving us less VIEWs to manange
     cursor.execute(
         f"""
         SELECT
@@ -296,7 +300,9 @@ async def extract_entities(
             synonym_map=shared._synonym_map,
             use_stats_ordering=payload.use_stats_ordering,
             use_collection_filter=payload.use_collection_filter,
-            collection_ids=list(payload.collection_ids) if payload.collection_ids else [],
+            collection_ids=list(payload.collection_ids)
+            if payload.collection_ids
+            else [],
         )
         sql_resolver.acronym_index = shared.acronym_index
         resolver = FallbackResolver(sql_resolver, fuzzy_resolver)

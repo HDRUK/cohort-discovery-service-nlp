@@ -82,7 +82,7 @@ def test_domain_filter_is_forwarded():
     # verify domain was included in the SQL call
     call_args = conn.cursor.return_value.execute.call_args
     sql, bindings = call_args[0]
-    assert "d.category = %s" in sql
+    assert "d.domain_id = %s" in sql
     assert "measurement" in bindings
 
 

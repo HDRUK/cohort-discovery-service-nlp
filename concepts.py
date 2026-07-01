@@ -29,7 +29,11 @@ def _extract_medcat_tokens(terms: List[str]) -> List[str]:
     tokens = []
     for term in terms:
         for word in re.sub(r"[^a-zA-Z]", " ", term).lower().split():
-            if len(word) >= _MEDCAT_TOKEN_MIN_LEN and word not in _MEDCAT_TOKEN_STOPWORDS and word not in seen:
+            if (
+                len(word) >= _MEDCAT_TOKEN_MIN_LEN
+                and word not in _MEDCAT_TOKEN_STOPWORDS
+                and word not in seen
+            ):
                 seen.add(word)
                 tokens.append(word)
     return tokens
@@ -69,7 +73,6 @@ class ConceptSearchResponse(BaseModel):
     current_page: int
     last_page: int
     data: List[ConceptSearchResult]
-
 
 
 def _get_medcat_names(terms: List[str]) -> List[str]:
@@ -151,7 +154,7 @@ def build_where_conditions(
         if not term:
             continue
         normalised = _normalise_for_like(term)
-        conditions.append("d.description LIKE %s")
+        conditions.append("d.concept_name LIKE %s")
         bindings.append(f"%{normalised}%")
 
     for term in medcat_names:
@@ -159,11 +162,11 @@ def build_where_conditions(
         if not term:
             continue
         normalised = _normalise_for_like(term, strip_s=True)
-        conditions.append("d.description LIKE %s")
+        conditions.append("d.concept_name LIKE %s")
         bindings.append(f"%{normalised}%")
 
     for token in _extract_medcat_tokens(medcat_names):
-        conditions.append("d.description LIKE %s")
+        conditions.append("d.concept_name LIKE %s")
         bindings.append(f"%{token}%")
 
     if synonym_concept_ids:
@@ -190,9 +193,9 @@ def build_score_sql(
         clauses.append(
             f"""
             CASE
-                WHEN LOWER(d.description) = LOWER(%s) THEN {CONCEPT_MATCH_SCORE_EXACT}
-                WHEN LOWER(d.description) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_CONTAINS}
-                WHEN LOWER(d.description) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_PREFIX}
+                WHEN LOWER(d.concept_name) = LOWER(%s) THEN {CONCEPT_MATCH_SCORE_EXACT}
+                WHEN LOWER(d.concept_name) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_CONTAINS}
+                WHEN LOWER(d.concept_name) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_PREFIX}
                 ELSE 0
             END
             """
@@ -209,8 +212,8 @@ def build_score_sql(
         clauses.append(
             f"""
             CASE
-                WHEN LOWER(d.description) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_CONTAINS}
-                WHEN LOWER(d.description) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_PREFIX}
+                WHEN LOWER(d.concept_name) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_CONTAINS}
+                WHEN LOWER(d.concept_name) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_PREFIX}
                 ELSE 0
             END
             """
@@ -220,7 +223,7 @@ def build_score_sql(
 
     for token in _extract_medcat_tokens(medcat_names):
         clauses.append(
-            f"CASE WHEN LOWER(d.description) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_TOKEN} ELSE 0 END"
+            f"CASE WHEN LOWER(d.concept_name) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_TOKEN} ELSE 0 END"
         )
         bindings.append(f"%{token}%")
 

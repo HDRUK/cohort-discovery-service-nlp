@@ -62,7 +62,7 @@ class MySQLConceptResolver:
             where_bindings.extend(collection_ids)
 
         if domain:
-            where.append("d.category = %s")
+            where.append("d.domain_id = %s")
             where_bindings.append(domain.lower())
 
         search_conds, search_bindings = build_where_conditions(
@@ -81,15 +81,15 @@ class MySQLConceptResolver:
         if include_ancestors:
             children_join = """
                 LEFT JOIN concept_ancestors ca ON ca.parent_concept_id = base.concept_id
-                LEFT JOIN distributions dc ON dc.concept_id = ca.child_concept_id
+                LEFT JOIN latest_distributions dc ON dc.concept_id = ca.child_concept_id
             """
             children_select = """,
                 JSON_ARRAYAGG(
                     CASE WHEN dc.concept_id IS NOT NULL THEN
                         JSON_OBJECT(
                             'concept_id', dc.concept_id,
-                            'name', dc.description,
-                            'category', dc.category
+                            'name', dc.concept_name,
+                            'category', dc.domain_id
                         )
                     END
                 ) AS children
@@ -121,14 +121,14 @@ class MySQLConceptResolver:
             WITH base AS (
                 SELECT
                     d.concept_id,
-                    d.description AS name,
-                    d.category,
+                    d.concept_name AS name,
+                    d.domain_id AS category,
                     {score_sql} AS match_score,
                     COUNT(DISTINCT d.collection_id) AS ncollections,
                     SUM(d.count) AS count
-                FROM distributions d
+                FROM latest_distributions d
                 WHERE {where_clause}
-                GROUP BY d.concept_id, d.description, d.category
+                GROUP BY d.concept_id, d.concept_name, d.domain_id
             ),
             total AS (
                 SELECT COUNT(*) AS cnt FROM base
