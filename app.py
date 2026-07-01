@@ -1,20 +1,20 @@
 import os
-import sys
-import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
-import mysql.connector
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Query, Request
 from pydantic import BaseModel
+from sqlalchemy import create_engine
+from sqlalchemy.engine import URL as EngineURL
 
 from concepts import router as concepts_router
+from loaders.concepts import load_concepts_from_mysql
+from loaders.synonyms import load_synonym_map
 from parsing import QueryParser
 from resolvers import FallbackResolver, MySQLConceptResolver
 from rules_engine import RuleEngine
 from store import ResolverStore
-from synonyms import load_synonym_map
 
 
 # Load environment variables
@@ -39,93 +39,41 @@ OMOP_DB_CONFIG = {
     "database": os.getenv("OMOP_DB_NAME", os.getenv("DB_NAME")),
 }
 
-VIEW_NAME = os.getenv("OMOP_VIEW", "distribution_concepts")
 DEFAULT_THRESHOLD = int(os.getenv("DEFAULT_THRESHOLD", 90))
 
 
-# ------------------------------------------------------------
-# Load OMOP concepts from MySQL
-# ------------------------------------------------------------
-def load_concepts_from_mysql():
-    start_time = time.time()
-
-    # Connection phase
-    conn_start = time.time()
-    conn = mysql.connector.connect(**DB_CONFIG)
-    cursor = conn.cursor(dictionary=True)
-    conn_time = time.time() - conn_start
-
-    # Query execution phase
-    query_start = time.time()
-    # refactor-candidate
-    # - we now have latest_distribution VIEW which is stratified on collection
-    # - we could use that and aggregate the result making this VIEW redundnant
-    #   and giving us less VIEWs to manange
-    cursor.execute(
-        f"""
-        SELECT
-            concept_id,
-            concept_name,
-            concept_name as description,
-            domain_id,
-            vocabulary_id,
-            concept_class,
-            standard_concept,
-            concept_code,
-            count,
-            ncollections,
-            all_synthetic
-        FROM {VIEW_NAME}
-        WHERE concept_name IS NOT NULL;
-        """
+def _build_engine(cfg: dict):
+    url = EngineURL.create(
+        drivername="mysql+mysqlconnector",
+        username=cfg["user"],
+        password=cfg["password"],
+        host=cfg["host"],
+        port=cfg["port"],
+        database=cfg["database"],
     )
-    query_time = time.time() - query_start
-
-    # Fetch phase
-    fetch_start = time.time()
-    concepts = cursor.fetchall()
-    fetch_time = time.time() - fetch_start
-
-    conn.close()
-
-    total_time = time.time() - start_time
-
-    # Estimate memory usage (rough approximation)
-    concepts_size = sys.getsizeof(concepts)
-
-    # Print profiling information
-    print("\n[Profiling] load_concepts_from_mysql")
-    print(f"  - Connection time: {conn_time * 1000:.2f}ms")
-    print(f"  - Query execution time: {query_time * 1000:.2f}ms")
-    print(f"  - Fetch time: {fetch_time * 1000:.2f}ms")
-    print(f"  - Total time: {total_time * 1000:.2f}ms")
-    print(f"  - Concepts loaded: {len(concepts)}")
-    print(f"  - Estimated memory: {concepts_size / 1024 / 1024:.2f}MB")
-    print(f"  - TTL: {STORE_REFRESH_TTL}s\n")
-
-    return concepts
-
+    return create_engine(url, pool_size=5, max_overflow=10, pool_pre_ping=True)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.db_config = DB_CONFIG
+    db_engine = _build_engine(DB_CONFIG)
+    app.state.db_engine = db_engine
 
     def enrich_resolver(store, concepts):
         store.synonym_map = load_synonym_map(OMOP_DB_CONFIG, [c["concept_id"] for c in concepts])
         store.acronym_index = ENGINE.build_acronym_index(concepts)
 
     store = ResolverStore(
-        load_concepts_from_mysql,
+        lambda: load_concepts_from_mysql(db_engine),
         ttl_seconds=STORE_REFRESH_TTL,
         postprocess=enrich_resolver,
     )
     resolver = await store.get_resolver()
     app.state.resolver_store = store
-    app.state.sql_resolver = MySQLConceptResolver(DB_CONFIG, store)
+    app.state.sql_resolver = MySQLConceptResolver(db_engine, store)
     app.state.fallback_resolver = FallbackResolver(app.state.sql_resolver, store)
     print(
-        f"[Start-up] Loaded FuzzyConceptResolver (concepts={len(resolver.concepts)}) from `{VIEW_NAME}`"
+        f"[Start-up] Loaded FuzzyConceptResolver (concepts={len(resolver.concepts)}) from `distribution_concepts`"
     )
     yield
 

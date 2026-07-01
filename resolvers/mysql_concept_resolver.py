@@ -1,7 +1,7 @@
 import time
 from typing import Any, Dict, List, Optional
 
-import mysql.connector
+from sqlalchemy.engine import Engine
 
 from resolvers.base_resolver import BaseResolver
 from concepts import (
@@ -13,9 +13,9 @@ from concepts import (
 
 
 class MySQLConceptResolver(BaseResolver):
-    def __init__(self, db_config: Dict[str, Any], store=None) -> None:
+    def __init__(self, engine: Engine, store=None) -> None:
         super().__init__(store)
-        self._db_config = db_config
+        self._engine = engine
 
     def search(
         self,
@@ -59,7 +59,11 @@ class MySQLConceptResolver(BaseResolver):
             concept_ids, concept_names, medcat_names, syn_concept_ids
         )
         score_sql, score_bindings = build_score_sql(
-            concept_names, medcat_names, concept_ids, syn_concept_ids
+            concept_names,
+            medcat_names,
+            concept_ids,
+            syn_concept_ids,
+            collection_ids=collection_ids or [],
         )
 
         if search_conds:
@@ -78,8 +82,8 @@ class MySQLConceptResolver(BaseResolver):
                     CASE WHEN dc.concept_id IS NOT NULL THEN
                         JSON_OBJECT(
                             'concept_id', dc.concept_id,
-                            'name', dc.concept_name,
-                            'category', dc.domain_id
+                            'concept_name', dc.concept_name,
+                            'domain_id', dc.domain_id
                         )
                     END
                 ) AS children
@@ -111,8 +115,8 @@ class MySQLConceptResolver(BaseResolver):
             WITH base AS (
                 SELECT
                     d.concept_id,
-                    d.concept_name AS name,
-                    d.domain_id AS category,
+                    d.concept_name as name,
+                    d.domain_id as category,
                     {score_sql} AS match_score,
                     COUNT(DISTINCT d.collection_id) AS ncollections,
                     SUM(d.count) AS count
@@ -144,18 +148,22 @@ class MySQLConceptResolver(BaseResolver):
 
         final_bindings = score_bindings + where_bindings + [per_page, offset]
 
-        conn = mysql.connector.connect(**self._db_config)
+        raw_conn = self._engine.raw_connection()
         try:
-            cursor = conn.cursor(dictionary=True)
+            cursor = raw_conn.cursor(dictionary=True)
             main_t0 = time.time()
             cursor.execute(sql, final_bindings)
             rows = cursor.fetchall()
-            collection_info = f"collection_ids={collection_ids}" if use_collection_filter and collection_ids else "collection_filter=off"
+            collection_info = (
+                f"collection_ids={collection_ids}"
+                if use_collection_filter and collection_ids
+                else "collection_filter=off"
+            )
             print(
                 f"[Resolver] main query: {(time.time() - main_t0) * 1000:.1f}ms synonym_ids={syn_concept_ids} {collection_info} results={len(rows)}"
             )
         finally:
-            conn.close()
+            raw_conn.close()
 
         total = int(rows[0]["cnt"]) if rows else 0
         return {"total": total, "data": rows}

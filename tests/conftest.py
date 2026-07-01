@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 from app import app
 from resolvers import FallbackResolver, FuzzyConceptResolver, MySQLConceptResolver
 
@@ -15,7 +17,7 @@ _store = _MinimalStore()
 _store.resolver = FuzzyConceptResolver([])
 
 if not hasattr(app.state, "sql_resolver"):
-    app.state.sql_resolver = MySQLConceptResolver({}, _store)
+    app.state.sql_resolver = MySQLConceptResolver(MagicMock(), _store)
 
 if not hasattr(app.state, "fallback_resolver"):
     app.state.fallback_resolver = FallbackResolver(app.state.sql_resolver, _store)

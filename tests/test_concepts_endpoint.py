@@ -7,17 +7,6 @@ from app import app
 
 client = TestClient(app)
 
-try:
-    app.state.db_config
-except AttributeError:
-    app.state.db_config = {}
-
-try:
-    app.state.sql_resolver
-except AttributeError:
-    from resolvers import MySQLConceptResolver
-    app.state.sql_resolver = MySQLConceptResolver({}, None)
-
 
 def _make_row(concept_id, name, category, match_score, ncollections, count, cnt=None, children=None):
     return {
@@ -32,12 +21,14 @@ def _make_row(concept_id, name, category, match_score, ncollections, count, cnt=
     }
 
 
-def _mock_conn(rows):
+def _mock_engine(rows):
     cursor = MagicMock()
     cursor.fetchall.return_value = rows
-    conn = MagicMock()
-    conn.cursor.return_value = cursor
-    return conn
+    raw_conn = MagicMock()
+    raw_conn.cursor.return_value = cursor
+    mock_engine = MagicMock()
+    mock_engine.raw_connection.return_value = raw_conn
+    return mock_engine, raw_conn
 
 
 def test_search_by_concept_name_returns_matching_rows():
@@ -45,7 +36,8 @@ def test_search_by_concept_name_returns_matching_rows():
         _make_row(24006, "Sickle cell-hemoglobin C disease", "Condition", 500, 1, 10, cnt=2),
         _make_row(24007, "Sickle cell-thalassemia disease", "Condition", 500, 1, 5, cnt=2),
     ]
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn(rows)):
+    mock_engine, _ = _mock_engine(rows)
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
         response = client.post("/concepts/search", json={"concept_name": ["sickle"], "include_ancestors": False})
 
     assert response.status_code == 200
@@ -58,7 +50,8 @@ def test_search_by_concept_name_returns_matching_rows():
 
 def test_search_by_concept_id_returns_exact_match():
     rows = [_make_row(24006, "Sickle cell-hemoglobin C disease", "Condition", 1000, 1, 10, cnt=1)]
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn(rows)):
+    mock_engine, _ = _mock_engine(rows)
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
         response = client.post("/concepts/search", json={"concept_id": [24006], "include_ancestors": False})
 
     assert response.status_code == 200
@@ -70,8 +63,8 @@ def test_search_by_concept_id_returns_exact_match():
 
 def test_domain_filter_is_forwarded():
     rows = [_make_row(3027018, "Heart rate", "Measurement", 0, 1, 20, cnt=1)]
-    conn = _mock_conn(rows)
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=conn) as mock_connect:
+    mock_engine, raw_conn = _mock_engine(rows)
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
         response = client.post("/concepts/search", json={"domain": "Measurement", "include_ancestors": False})
 
     assert response.status_code == 200
@@ -80,7 +73,7 @@ def test_domain_filter_is_forwarded():
     assert body["data"][0]["category"] == "Measurement"
 
     # verify domain was included in the SQL call
-    call_args = conn.cursor.return_value.execute.call_args
+    call_args = raw_conn.cursor.return_value.execute.call_args
     sql, bindings = call_args[0]
     assert "d.domain_id = %s" in sql
     assert "measurement" in bindings
@@ -88,8 +81,8 @@ def test_domain_filter_is_forwarded():
 
 def test_collection_filter_applied_when_flag_set():
     rows = [_make_row(3027018, "Heart rate", "Measurement", 0, 1, 20, cnt=1)]
-    conn = _mock_conn(rows)
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=conn):
+    mock_engine, raw_conn = _mock_engine(rows)
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
         response = client.post(
             "/concepts/search",
             json={
@@ -100,7 +93,7 @@ def test_collection_filter_applied_when_flag_set():
         )
 
     assert response.status_code == 200
-    call_args = conn.cursor.return_value.execute.call_args
+    call_args = raw_conn.cursor.return_value.execute.call_args
     sql, bindings = call_args[0]
     assert "d.collection_id IN" in sql
     assert 2 in bindings
@@ -108,8 +101,8 @@ def test_collection_filter_applied_when_flag_set():
 
 def test_collection_filter_not_applied_when_flag_false():
     rows = [_make_row(3027018, "Heart rate", "Measurement", 0, 1, 20, cnt=1)]
-    conn = _mock_conn(rows)
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=conn):
+    mock_engine, raw_conn = _mock_engine(rows)
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
         response = client.post(
             "/concepts/search",
             json={
@@ -120,22 +113,23 @@ def test_collection_filter_not_applied_when_flag_false():
         )
 
     assert response.status_code == 200
-    call_args = conn.cursor.return_value.execute.call_args
+    call_args = raw_conn.cursor.return_value.execute.call_args
     sql, _bindings = call_args[0]
-    assert "d.collection_id IN" not in sql
+    where_clause = sql.split("WHERE", 1)[1].split("GROUP BY")[0] if "WHERE" in sql else ""
+    assert "d.collection_id IN" not in where_clause
 
 
 def test_stats_ordering_included_when_flag_set():
     rows = [_make_row(1, "Diabetes", "Condition", 0, 1, 10, cnt=1)]
-    conn = _mock_conn(rows)
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=conn):
+    mock_engine, raw_conn = _mock_engine(rows)
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
         response = client.post(
             "/concepts/search",
             json={"use_stats_ordering": True, "include_ancestors": False},
         )
 
     assert response.status_code == 200
-    call_args = conn.cursor.return_value.execute.call_args
+    call_args = raw_conn.cursor.return_value.execute.call_args
     sql, _bindings = call_args[0]
     assert "base.ncollections DESC" in sql
     assert "base.count DESC" in sql
@@ -143,15 +137,15 @@ def test_stats_ordering_included_when_flag_set():
 
 def test_stats_ordering_excluded_when_flag_false():
     rows = [_make_row(1, "Diabetes", "Condition", 0, 1, 10, cnt=1)]
-    conn = _mock_conn(rows)
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=conn):
+    mock_engine, raw_conn = _mock_engine(rows)
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
         response = client.post(
             "/concepts/search",
             json={"use_stats_ordering": False, "include_ancestors": False},
         )
 
     assert response.status_code == 200
-    call_args = conn.cursor.return_value.execute.call_args
+    call_args = raw_conn.cursor.return_value.execute.call_args
     sql, _bindings = call_args[0]
     assert "base.ncollections DESC" not in sql
 
@@ -161,7 +155,8 @@ def test_no_search_params_returns_all_rows():
         _make_row(1, "Concept A", "Condition", 0, 1, 10, cnt=2),
         _make_row(2, "Concept B", "Measurement", 0, 1, 5, cnt=2),
     ]
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn(rows)):
+    mock_engine, _ = _mock_engine(rows)
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
         response = client.post("/concepts/search", json={"include_ancestors": False})
 
     assert response.status_code == 200
@@ -175,7 +170,8 @@ def test_pagination_slices_correctly():
         _make_row(24007, "Sickle cell-thalassemia disease", "Condition", 0, 1, 5, cnt=4),
         _make_row(24006, "Sickle cell-hemoglobin C disease", "Condition", 0, 1, 10, cnt=4),
     ]
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn(rows)):
+    mock_engine, _ = _mock_engine(rows)
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
         response = client.post(
             "/concepts/search",
             json={"page": 2, "per_page": 2, "include_ancestors": False},
@@ -192,13 +188,13 @@ def test_pagination_slices_correctly():
 
 def test_include_ancestors_false_skips_children_join():
     rows = [_make_row(1, "Diabetes", "Condition", 0, 1, 10, cnt=1)]
-    conn = _mock_conn(rows)
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=conn):
+    mock_engine, raw_conn = _mock_engine(rows)
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
         response = client.post("/concepts/search", json={"include_ancestors": False})
 
     assert response.status_code == 200
     body = response.json()
-    call_args = conn.cursor.return_value.execute.call_args
+    call_args = raw_conn.cursor.return_value.execute.call_args
     sql, _bindings = call_args[0]
     assert "concept_ancestors" not in sql
     assert body["data"][0]["children"] == []
@@ -217,7 +213,8 @@ def test_include_ancestors_true_attaches_children():
             "children": '[{"concept_id": 99, "name": "Child concept", "category": "Condition"}]',
         }
     ]
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn(rows)):
+    mock_engine, _ = _mock_engine(rows)
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
         response = client.post(
             "/concepts/search",
             json={"concept_id": [320128], "include_ancestors": True},
@@ -242,7 +239,8 @@ def test_children_null_entries_are_filtered():
             "children": '[{"concept_id": 99, "name": "Child", "category": "Condition"}, null]',
         }
     ]
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn(rows)):
+    mock_engine, _ = _mock_engine(rows)
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
         response = client.post(
             "/concepts/search",
             json={"concept_id": [320128], "include_ancestors": True},
@@ -255,16 +253,15 @@ def test_children_null_entries_are_filtered():
 
 def test_separator_variants_match_via_normalisation():
     """Non-alphanumeric separators are replaced with % in the LIKE pattern."""
-    conn = _mock_conn([])
-    conn.cursor.return_value.fetchall.return_value = []
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=conn):
+    mock_engine, raw_conn = _mock_engine([])
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
         response = client.post(
             "/concepts/search",
             json={"concept_name": ["sickle cell-hemoglobin"], "include_ancestors": False},
         )
 
     assert response.status_code == 200
-    call_args = conn.cursor.return_value.execute.call_args
+    call_args = raw_conn.cursor.return_value.execute.call_args
     _sql, bindings = call_args[0]
     # The LIKE binding should use % where the hyphen/space was
     like_bindings = [b for b in bindings if isinstance(b, str) and "%" in b and "sickle" in b.lower()]
@@ -272,7 +269,8 @@ def test_separator_variants_match_via_normalisation():
 
 
 def test_empty_rows_returns_zero_total():
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn([])):
+    mock_engine, _ = _mock_engine([])
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
         response = client.post("/concepts/search", json={"concept_name": ["xyz_no_match"], "include_ancestors": False})
 
     assert response.status_code == 200
@@ -306,9 +304,9 @@ def test_medcat_expansion_augments_search_terms(monkeypatch):
     monkeypatch.setenv("MEDCAT_URL", "http://medcat.example.com")
     monkeypatch.setenv("MEDCAT_MIN_ACC", "0.5")
 
-    conn = _mock_conn([])
+    mock_engine, raw_conn = _mock_engine([])
     with (
-        patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=conn),
+        patch.object(app.state.sql_resolver, "_engine", mock_engine),
         patch("concepts.httpx.post", return_value=_medcat_response("Chronic Kidney Diseases")),
     ):
         response = client.post(
@@ -317,7 +315,7 @@ def test_medcat_expansion_augments_search_terms(monkeypatch):
         )
 
     assert response.status_code == 200
-    _sql, bindings = conn.cursor.return_value.execute.call_args[0]
+    _sql, bindings = raw_conn.cursor.return_value.execute.call_args[0]
     str_bindings = [b for b in bindings if isinstance(b, str)]
     # Original term still present
     assert any("ckd" in b.lower() for b in str_bindings)
@@ -329,9 +327,9 @@ def test_medcat_unavailable_falls_back_to_original(monkeypatch):
     """When the MedCAT call raises, the original term is still searched."""
     monkeypatch.setenv("MEDCAT_URL", "http://medcat.example.com")
 
-    conn = _mock_conn([])
+    mock_engine, raw_conn = _mock_engine([])
     with (
-        patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=conn),
+        patch.object(app.state.sql_resolver, "_engine", mock_engine),
         patch("concepts.httpx.post", side_effect=ConnectionError("unreachable")),
     ):
         response = client.post(
@@ -340,7 +338,7 @@ def test_medcat_unavailable_falls_back_to_original(monkeypatch):
         )
 
     assert response.status_code == 200
-    _sql, bindings = conn.cursor.return_value.execute.call_args[0]
+    _sql, bindings = raw_conn.cursor.return_value.execute.call_args[0]
     str_bindings = [b for b in bindings if isinstance(b, str)]
     assert any("ckd" in b.lower() for b in str_bindings)
 
@@ -349,9 +347,9 @@ def test_medcat_url_not_set_does_not_crash(monkeypatch):
     """When MEDCAT_URL is not configured the endpoint works without calling MedCAT."""
     monkeypatch.delenv("MEDCAT_URL", raising=False)
 
-    conn = _mock_conn([])
+    mock_engine, raw_conn = _mock_engine([])
     with (
-        patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=conn),
+        patch.object(app.state.sql_resolver, "_engine", mock_engine),
         patch("concepts.httpx.post", side_effect=Exception("should not be called")),
     ):
         response = client.post(
@@ -360,7 +358,7 @@ def test_medcat_url_not_set_does_not_crash(monkeypatch):
         )
 
     assert response.status_code == 200
-    _sql, bindings = conn.cursor.return_value.execute.call_args[0]
+    _sql, bindings = raw_conn.cursor.return_value.execute.call_args[0]
     str_bindings = [b for b in bindings if isinstance(b, str)]
     assert any("ckd" in b.lower() for b in str_bindings)
 
@@ -376,12 +374,15 @@ def test_stats_ordering_affects_result_order():
         _make_row(2, "Diabetes mellitus type 2", "Condition", 500, 10, 1000, cnt=2),
     ]
 
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn(rows_stats)):
+    mock_engine_stats, _ = _mock_engine(rows_stats)
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine_stats):
         resp_stats = client.post(
             "/concepts/search",
             json={"concept_name": ["diabetes"], "use_stats_ordering": True, "include_ancestors": False},
         )
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=_mock_conn(rows_default)):
+
+    mock_engine_default, _ = _mock_engine(rows_default)
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine_default):
         resp_default = client.post(
             "/concepts/search",
             json={"concept_name": ["diabetes"], "use_stats_ordering": False, "include_ancestors": False},
@@ -392,8 +393,8 @@ def test_stats_ordering_affects_result_order():
 
 
 def test_collection_filter_restricts_results():
-    conn = _mock_conn([_make_row(1, "Diabetes", "Condition", 500, 2, 100, cnt=1)])
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=conn):
+    mock_engine, raw_conn = _mock_engine([_make_row(1, "Diabetes", "Condition", 500, 2, 100, cnt=1)])
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
         response = client.post(
             "/concepts/search",
             json={
@@ -405,15 +406,15 @@ def test_collection_filter_restricts_results():
         )
 
     assert response.status_code == 200
-    sql, bindings = conn.cursor.return_value.execute.call_args[0]
+    sql, bindings = raw_conn.cursor.return_value.execute.call_args[0]
     assert "d.collection_id IN" in sql
     assert 3 in bindings
     assert 7 in bindings
 
 
 def test_multiple_collection_ids_all_in_bindings():
-    conn = _mock_conn([])
-    with patch("resolvers.mysql_concept_resolver.mysql.connector.connect", return_value=conn):
+    mock_engine, raw_conn = _mock_engine([])
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
         client.post(
             "/concepts/search",
             json={
@@ -423,5 +424,5 @@ def test_multiple_collection_ids_all_in_bindings():
             },
         )
 
-    _sql, bindings = conn.cursor.return_value.execute.call_args[0]
+    _sql, bindings = raw_conn.cursor.return_value.execute.call_args[0]
     assert all(cid in bindings for cid in [1, 2, 3])

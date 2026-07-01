@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 router = APIRouter()
 
@@ -15,6 +15,7 @@ CONCEPT_MATCH_SCORE_CONTAINS = int(os.getenv("CONCEPT_MATCH_SCORE_CONTAINS", 500
 CONCEPT_MATCH_SCORE_PREFIX = int(os.getenv("CONCEPT_MATCH_SCORE_PREFIX", 100))
 CONCEPT_MATCH_SCORE_SYNONYM = int(os.getenv("CONCEPT_MATCH_SCORE_SYNONYM", 1000))
 CONCEPT_MATCH_SCORE_TOKEN = int(os.getenv("CONCEPT_MATCH_SCORE_TOKEN", 50))
+CONCEPT_MATCH_SCORE_COLLECTION = int(os.getenv("CONCEPT_MATCH_SCORE_COLLECTION", 2000))
 
 _rules_path = os.getenv("RULES_PATH", "rules.json")
 with open(_rules_path) as _f:
@@ -58,6 +59,8 @@ class ChildConcept(BaseModel):
 
 
 class ConceptSearchResult(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     concept_id: int
     name: str
     category: str
@@ -65,6 +68,27 @@ class ConceptSearchResult(BaseModel):
     ncollections: int
     count: Optional[int]
     children: List[ChildConcept] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def _parse_children(cls, data: dict) -> dict:
+        raw = data.get("children")
+        if raw is None:
+            data["children"] = []
+        elif isinstance(raw, (bytes, str)):
+            decoded = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            data["children"] = [c for c in json.loads(decoded) or [] if c is not None]
+        return data
+
+    @field_validator("match_score", "ncollections", mode="before")
+    @classmethod
+    def _coerce_nullable_int(cls, v: Any) -> int:
+        return int(v or 0)
+
+    @field_validator("count", mode="before")
+    @classmethod
+    def _coerce_count(cls, v: Any) -> Optional[int]:
+        return int(v) if v is not None else None
 
 
 class ConceptSearchResponse(BaseModel):
@@ -182,6 +206,7 @@ def build_score_sql(
     medcat_names: list,
     concept_ids: list,
     synonym_concept_ids: Optional[List[int]] = None,
+    collection_ids: Optional[List[int]] = None,
 ) -> tuple:
     clauses: List[str] = []
     bindings: List[Any] = []
@@ -245,31 +270,19 @@ def build_score_sql(
         )
         bindings.extend(synonym_concept_ids)
 
+    if collection_ids:
+        placeholders = ", ".join(["%s"] * len(collection_ids))
+        clauses.append(
+            f"MAX(CASE WHEN d.collection_id IN ({placeholders}) THEN {CONCEPT_MATCH_SCORE_COLLECTION} ELSE 0 END)"
+        )
+        bindings.extend(collection_ids)
+
     score_sql = "(" + " + ".join(clauses) + ")" if clauses else "0"
     return score_sql, bindings
 
 
 def _parse_row(row: dict, include_ancestors: bool) -> "ConceptSearchResult":
-    del row["cnt"]
-
-    children: List[ChildConcept] = []
-    if include_ancestors:
-        raw = row.pop("children", None)
-        if raw is not None:
-            if isinstance(raw, bytes):
-                raw = raw.decode("utf-8")
-            parsed = json.loads(raw) or []
-            children = [ChildConcept(**c) for c in parsed if c is not None]
-
-    return ConceptSearchResult(
-        concept_id=int(row["concept_id"]),
-        name=row["name"],
-        category=row["category"],
-        match_score=int(row["match_score"] or 0),
-        ncollections=int(row["ncollections"] or 0),
-        count=int(row["count"]) if row.get("count") is not None else None,
-        children=children,
-    )
+    return ConceptSearchResult.model_validate(row)
 
 
 @router.post("/concepts/search", response_model=ConceptSearchResponse)
