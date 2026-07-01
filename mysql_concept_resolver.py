@@ -196,7 +196,6 @@ class MySQLConceptResolver:
             {
                 "concept_id": int(row["concept_id"]),
                 "concept_name": row["name"],
-                "description": row["name"],
                 "domain_id": row["category"],
                 "match_score": int(row["match_score"] or 0),
                 "ncollections": int(row["ncollections"] or 0),
