@@ -28,9 +28,13 @@ class FallbackResolver:
         return getattr(self._primary, "acronym_index", {})
 
     def resolve(self, text, threshold, *, phrase_first=True, max_matches=None):
-        results = self._primary.resolve(text, threshold, phrase_first=phrase_first, max_matches=max_matches)
+        results = self._primary.resolve(
+            text, threshold, phrase_first=phrase_first, max_matches=max_matches
+        )
         if not results:
-            results = self._fallback.resolve(text, threshold, phrase_first=phrase_first, max_matches=max_matches)
+            results = self._fallback.resolve(
+                text, threshold, phrase_first=phrase_first, max_matches=max_matches
+            )
         return results
 
 
@@ -51,7 +55,10 @@ DB_CONFIG = {
 
 # OMOP vocabulary DB — may differ from the app DB (e.g. concept_synonym lives here).
 # Falls back to DB_NAME if OMOP_DB_NAME is not set.
-OMOP_DB_CONFIG = {**DB_CONFIG, "database": os.getenv("OMOP_DB_NAME", os.getenv("DB_NAME"))}
+OMOP_DB_CONFIG = {
+    **DB_CONFIG,
+    "database": os.getenv("OMOP_DB_NAME", os.getenv("DB_NAME")),
+}
 
 VIEW_NAME = os.getenv("OMOP_VIEW", "distribution_concepts")
 DEFAULT_THRESHOLD = int(os.getenv("DEFAULT_THRESHOLD", 90))
@@ -131,7 +138,9 @@ def load_synonym_map(concept_ids: List[int]) -> Dict[int, List[str]]:
         exists = cursor.fetchone()
         cursor.close()
         if not exists:
-            print("[Start-up] concept_synonym table not found — synonym search disabled")
+            print(
+                "[Start-up] concept_synonym table not found — synonym search disabled"
+            )
             return {}
         placeholders = ",".join(["%s"] * len(concept_ids))
         cursor = conn.cursor(dictionary=True)
@@ -142,7 +151,9 @@ def load_synonym_map(concept_ids: List[int]) -> Dict[int, List[str]]:
         result: Dict[int, List[str]] = {}
         for row in cursor.fetchall():
             if row.get("concept_synonym_name"):
-                result.setdefault(int(row["concept_id"]), []).append(row["concept_synonym_name"].lower())
+                result.setdefault(int(row["concept_id"]), []).append(
+                    row["concept_synonym_name"].lower()
+                )
         total_syns = sum(len(v) for v in result.values())
         print(f"[Store] Loaded {total_syns} synonyms for {len(result)} concepts")
         return result
@@ -199,6 +210,9 @@ PARSER = QueryParser(ENGINE)
 # ------------------------------------------------------------
 class QueryRequest(BaseModel):
     query: str
+    use_stats_ordering: bool = False
+    use_collection_filter: bool = False
+    collection_ids: Optional[List[int]] = None
 
 
 class Entity(BaseModel):
@@ -261,16 +275,9 @@ async def extract_entities(
         True, description="Prefer phrase overlap when token matching is available"
     ),
     max_matches: Optional[int] = Query(
-        None, ge=1, description="Max concept matches per entity (defaults to RESOLVER_MAX_MATCHES)"
-    ),
-    use_stats_ordering: bool = Query(
-        False, description="Order concept matches by ncollections/count"
-    ),
-    use_collection_filter: bool = Query(
-        False, description="Restrict concept matches to the given collection_ids"
-    ),
-    collection_ids: Optional[List[int]] = Query(
-        None, description="Collection IDs to filter when use_collection_filter=true"
+        None,
+        ge=1,
+        description="Max concept matches per entity (defaults to RESOLVER_MAX_MATCHES)",
     ),
     store: ResolverStore = Depends(get_resolver_store),
 ):
@@ -287,14 +294,16 @@ async def extract_entities(
         sql_resolver = MySQLConceptResolver(
             request.app.state.db_config,
             synonym_map=shared._synonym_map,
-            use_stats_ordering=use_stats_ordering,
-            use_collection_filter=use_collection_filter,
-            collection_ids=list(collection_ids) if collection_ids else [],
+            use_stats_ordering=payload.use_stats_ordering,
+            use_collection_filter=payload.use_collection_filter,
+            collection_ids=list(payload.collection_ids) if payload.collection_ids else [],
         )
         sql_resolver.acronym_index = shared.acronym_index
         resolver = FallbackResolver(sql_resolver, fuzzy_resolver)
 
-    ret_value = PARSER.extract(payload.query, threshold, phrase_first, resolver, max_matches=max_matches)
+    ret_value = PARSER.extract(
+        payload.query, threshold, phrase_first, resolver, max_matches=max_matches
+    )
 
     print(f"[Request] query='{payload.query}' => entities={ret_value}")
 

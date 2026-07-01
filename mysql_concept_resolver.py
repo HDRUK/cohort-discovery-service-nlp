@@ -160,8 +160,9 @@ class MySQLConceptResolver:
             main_t0 = time.time()
             cursor.execute(sql, final_bindings)
             rows = cursor.fetchall()
+            collection_info = f"collection_ids={collection_ids}" if use_collection_filter and collection_ids else "collection_filter=off"
             print(
-                f"[Resolver] main query: {(time.time() - main_t0) * 1000:.1f}ms synonym_ids={syn_concept_ids} results={len(rows)}"
+                f"[Resolver] main query: {(time.time() - main_t0) * 1000:.1f}ms synonym_ids={syn_concept_ids} {collection_info} results={len(rows)}"
             )
         finally:
             conn.close()

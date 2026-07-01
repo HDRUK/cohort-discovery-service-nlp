@@ -46,7 +46,12 @@ _SEARCH_RESULT = {
 
 @contextmanager
 def _sql_path(search_result=None):
-    """Force the SQL resolver backend and mock MySQLConceptResolver.search."""
+    """Force app.RESOLVER_BACKEND to 'sql' and mock MySQLConceptResolver.search.
+
+    Required because RESOLVER_BACKEND is a module-level constant — other tests
+    may have patched it to 'fuzzy', and patching it here ensures the SQL branch
+    of /extract is always exercised regardless of test order.
+    """
     result = search_result if search_result is not None else _SEARCH_RESULT
     with patch("app.RESOLVER_BACKEND", "sql"), \
          patch.object(MySQLConceptResolver, "search", return_value=result) as mock_search:
@@ -56,8 +61,8 @@ def _sql_path(search_result=None):
 def test_extract_collection_filter_applied():
     with _sql_path() as mock_search:
         response = client.post(
-            "/extract?use_collection_filter=true&collection_ids=5",
-            json={"query": "diabetes"},
+            "/extract",
+            json={"query": "diabetes", "use_collection_filter": True, "collection_ids": [5]},
         )
 
     assert response.status_code == 200
@@ -78,22 +83,24 @@ def test_extract_collection_filter_not_applied_by_default():
 
 def test_extract_collection_filter_ignored_when_flag_false():
     with _sql_path() as mock_search:
-        client.post(
-            "/extract?use_collection_filter=false&collection_ids=9",
-            json={"query": "diabetes"},
+        response = client.post(
+            "/extract",
+            json={"query": "diabetes", "use_collection_filter": False, "collection_ids": [9]},
         )
 
+    assert response.status_code == 200
     kwargs = mock_search.call_args[1]
     assert kwargs["use_collection_filter"] is False
 
 
 def test_extract_multiple_collection_ids():
     with _sql_path() as mock_search:
-        client.post(
-            "/extract?use_collection_filter=true&collection_ids=1&collection_ids=2&collection_ids=3",
-            json={"query": "diabetes"},
+        response = client.post(
+            "/extract",
+            json={"query": "diabetes", "use_collection_filter": True, "collection_ids": [1, 2, 3]},
         )
 
+    assert response.status_code == 200
     kwargs = mock_search.call_args[1]
     assert kwargs["collection_ids"] == [1, 2, 3]
 
@@ -101,8 +108,8 @@ def test_extract_multiple_collection_ids():
 def test_extract_stats_ordering_applied():
     with _sql_path() as mock_search:
         response = client.post(
-            "/extract?use_stats_ordering=true",
-            json={"query": "diabetes"},
+            "/extract",
+            json={"query": "diabetes", "use_stats_ordering": True},
         )
 
     assert response.status_code == 200
@@ -112,8 +119,9 @@ def test_extract_stats_ordering_applied():
 
 def test_extract_stats_ordering_off_by_default():
     with _sql_path() as mock_search:
-        client.post("/extract", json={"query": "diabetes"})
+        response = client.post("/extract", json={"query": "diabetes"})
 
+    assert response.status_code == 200
     kwargs = mock_search.call_args[1]
     assert kwargs["use_stats_ordering"] is False
 
