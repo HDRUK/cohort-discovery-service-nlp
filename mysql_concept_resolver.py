@@ -16,16 +16,10 @@ class MySQLConceptResolver:
         self,
         db_config: Dict[str, Any],
         synonym_map: Optional[Dict[int, List[str]]] = None,
-        use_stats_ordering: bool = False,
-        use_collection_filter: bool = False,
-        collection_ids: Optional[List[int]] = None,
     ) -> None:
         self._db_config = db_config
         self._synonym_map: Dict[int, List[str]] = synonym_map or {}
         self.acronym_index: Dict[str, List[str]] = {}
-        self._use_stats_ordering = use_stats_ordering
-        self._use_collection_filter = use_collection_filter
-        self._collection_ids: List[int] = collection_ids or []
 
     def search(
         self,
@@ -177,6 +171,9 @@ class MySQLConceptResolver:
         *,
         phrase_first: bool = True,
         max_matches: Optional[int] = 5,
+        use_stats_ordering: bool = False,
+        use_collection_filter: bool = False,
+        collection_ids: Optional[List[int]] = None,
     ) -> List[Dict[str, Any]]:
         text = text.strip()
         if not text:
@@ -184,9 +181,9 @@ class MySQLConceptResolver:
 
         result = self.search(
             concept_names=[text],
-            collection_ids=self._collection_ids,
-            use_collection_filter=self._use_collection_filter,
-            use_stats_ordering=self._use_stats_ordering,
+            collection_ids=collection_ids or [],
+            use_collection_filter=use_collection_filter,
+            use_stats_ordering=use_stats_ordering,
             include_ancestors=False,
             page=1,
             per_page=max_matches if max_matches is not None else 5,

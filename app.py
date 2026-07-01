@@ -19,9 +19,20 @@ from store import ResolverStore
 class FallbackResolver:
     """Wraps a primary resolver and falls back to a secondary when primary returns no matches."""
 
-    def __init__(self, primary, fallback):
+    def __init__(
+        self,
+        primary,
+        fallback,
+        *,
+        use_stats_ordering: bool = False,
+        use_collection_filter: bool = False,
+        collection_ids: Optional[List[int]] = None,
+    ):
         self._primary = primary
         self._fallback = fallback
+        self._use_stats_ordering = use_stats_ordering
+        self._use_collection_filter = use_collection_filter
+        self._collection_ids: List[int] = collection_ids or []
 
     @property
     def acronym_index(self):
@@ -29,7 +40,13 @@ class FallbackResolver:
 
     def resolve(self, text, threshold, *, phrase_first=True, max_matches=None):
         results = self._primary.resolve(
-            text, threshold, phrase_first=phrase_first, max_matches=max_matches
+            text,
+            threshold,
+            phrase_first=phrase_first,
+            max_matches=max_matches,
+            use_stats_ordering=self._use_stats_ordering,
+            use_collection_filter=self._use_collection_filter,
+            collection_ids=self._collection_ids,
         )
         if not results:
             results = self._fallback.resolve(
@@ -171,11 +188,6 @@ def load_synonym_map(concept_ids: List[int]) -> Dict[int, List[str]]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.db_config = DB_CONFIG
-    # Shared values populated by enrich_resolver on each store refresh and read
-    # by the /extract handler to initialise per-request MySQLConceptResolver instances.
-    app.state.synonym_map = {}
-    app.state.acronym_index = {}
-    # Singleton resolver used by POST /concepts/search (options passed per-call, not per-instance).
     app.state.sql_resolver = MySQLConceptResolver(DB_CONFIG)
 
     def enrich_resolver(resolver, concepts):
@@ -183,9 +195,8 @@ async def lifespan(app: FastAPI):
         concept_ids = [c["concept_id"] for c in concepts]
         synonym_map = load_synonym_map(concept_ids)
         resolver.synonym_map = synonym_map
-        app.state.synonym_map = synonym_map
-        app.state.acronym_index = resolver.acronym_index
         app.state.sql_resolver._synonym_map = synonym_map
+        app.state.sql_resolver.acronym_index = resolver.acronym_index
 
     store = ResolverStore(
         load_concepts_from_mysql,
@@ -298,17 +309,13 @@ async def extract_entities(
         resolver = await store.get_resolver()
     else:
         fuzzy_resolver = await store.get_resolver()
-        sql_resolver = MySQLConceptResolver(
-            request.app.state.db_config,
-            synonym_map=request.app.state.synonym_map,
+        resolver = FallbackResolver(
+            request.app.state.sql_resolver,
+            fuzzy_resolver,
             use_stats_ordering=payload.use_stats_ordering,
             use_collection_filter=payload.use_collection_filter,
-            collection_ids=list(payload.collection_ids)
-            if payload.collection_ids
-            else [],
+            collection_ids=list(payload.collection_ids) if payload.collection_ids else [],
         )
-        sql_resolver.acronym_index = request.app.state.acronym_index
-        resolver = FallbackResolver(sql_resolver, fuzzy_resolver)
 
     ret_value = PARSER.extract(
         payload.query, threshold, phrase_first, resolver, max_matches=max_matches
