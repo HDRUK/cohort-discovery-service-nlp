@@ -23,9 +23,14 @@ except AttributeError:
     app.state.db_config = {}
 
 try:
-    app.state.sql_resolver
+    app.state.synonym_map
 except AttributeError:
-    app.state.sql_resolver = MySQLConceptResolver({})
+    app.state.synonym_map = {}
+
+try:
+    app.state.acronym_index
+except AttributeError:
+    app.state.acronym_index = {}
 
 app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver([]))
 

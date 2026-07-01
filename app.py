@@ -171,17 +171,18 @@ def load_synonym_map(concept_ids: List[int]) -> Dict[int, List[str]]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.db_config = DB_CONFIG
-
-    sql_resolver = MySQLConceptResolver(DB_CONFIG)
-    app.state.sql_resolver = sql_resolver
+    # Shared values populated by enrich_resolver on each store refresh and read
+    # by the /extract handler to initialise per-request MySQLConceptResolver instances.
+    app.state.synonym_map = {}
+    app.state.acronym_index = {}
 
     def enrich_resolver(resolver, concepts):
         resolver.acronym_index = ENGINE.build_acronym_index(concepts)
         concept_ids = [c["concept_id"] for c in concepts]
         synonym_map = load_synonym_map(concept_ids)
         resolver.synonym_map = synonym_map
-        sql_resolver._synonym_map = synonym_map
-        sql_resolver.acronym_index = resolver.acronym_index
+        app.state.synonym_map = synonym_map
+        app.state.acronym_index = resolver.acronym_index
 
     store = ResolverStore(
         load_concepts_from_mysql,
@@ -294,17 +295,16 @@ async def extract_entities(
         resolver = await store.get_resolver()
     else:
         fuzzy_resolver = await store.get_resolver()
-        shared = request.app.state.sql_resolver
         sql_resolver = MySQLConceptResolver(
             request.app.state.db_config,
-            synonym_map=shared._synonym_map,
+            synonym_map=request.app.state.synonym_map,
             use_stats_ordering=payload.use_stats_ordering,
             use_collection_filter=payload.use_collection_filter,
             collection_ids=list(payload.collection_ids)
             if payload.collection_ids
             else [],
         )
-        sql_resolver.acronym_index = shared.acronym_index
+        sql_resolver.acronym_index = request.app.state.acronym_index
         resolver = FallbackResolver(sql_resolver, fuzzy_resolver)
 
     ret_value = PARSER.extract(
