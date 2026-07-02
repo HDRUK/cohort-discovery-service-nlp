@@ -96,7 +96,6 @@ PARSER = QueryParser(ENGINE)
 # ------------------------------------------------------------
 class QueryRequest(BaseModel):
     query: str
-    use_stats_ordering: bool = False
     use_collection_filter: bool = False
     collection_ids: Optional[List[int]] = None
 
@@ -182,7 +181,6 @@ async def extract_entities(
             phrase_first,
             request.app.state.fallback_resolver,
             max_matches=max_matches,
-            use_stats_ordering=payload.use_stats_ordering,
             use_collection_filter=payload.use_collection_filter,
             collection_ids=list(payload.collection_ids) if payload.collection_ids else [],
         )

@@ -6,6 +6,7 @@ from sqlalchemy.engine import Engine
 from resolvers.base_resolver import BaseResolver
 from concepts import (
     _get_medcat_names,
+    build_collection_score_sql,
     build_score_sql,
     build_where_conditions,
     find_synonym_concept_ids,
@@ -24,7 +25,6 @@ class MySQLConceptResolver(BaseResolver):
         domain: Optional[str] = None,
         collection_ids: Optional[List[int]] = None,
         use_collection_filter: bool = False,
-        use_stats_ordering: bool = False,
         include_ancestors: bool = True,
         page: int = 1,
         per_page: int = 25,
@@ -63,7 +63,10 @@ class MySQLConceptResolver(BaseResolver):
             medcat_names,
             concept_ids,
             syn_concept_ids,
-            collection_ids=collection_ids or [],
+        )
+
+        collection_score_sql, collection_score_bindings = build_collection_score_sql(
+            collection_ids or []
         )
 
         if search_conds:
@@ -88,26 +91,16 @@ class MySQLConceptResolver(BaseResolver):
                     END
                 ) AS children
             """
+            children_group_by = """
+                GROUP BY
+                    base.concept_id, base.name, base.category,
+                    base.match_score, base.collection_score,
+                    base.ncollections, base.count, total.cnt
+            """
         else:
             children_join = ""
             children_select = ""
-
-        if use_stats_ordering:
-            order_by = """
-                ORDER BY
-                    base.match_score DESC,
-                    base.ncollections DESC,
-                    base.count DESC,
-                    CHAR_LENGTH(base.name) ASC,
-                    base.concept_id
-            """
-        else:
-            order_by = """
-                ORDER BY
-                    base.match_score DESC,
-                    CHAR_LENGTH(base.name) ASC,
-                    base.concept_id
-            """
+            children_group_by = ""
 
         offset = (page - 1) * per_page
 
@@ -118,6 +111,7 @@ class MySQLConceptResolver(BaseResolver):
                     d.concept_name as name,
                     d.domain_id as category,
                     {score_sql} AS match_score,
+                    {collection_score_sql} AS collection_score,
                     COUNT(DISTINCT d.collection_id) AS ncollections,
                     SUM(d.count) AS count
                 FROM latest_distributions d
@@ -134,19 +128,20 @@ class MySQLConceptResolver(BaseResolver):
             FROM base
             CROSS JOIN total
             {children_join}
-            GROUP BY
-                base.concept_id,
-                base.name,
-                base.category,
-                base.match_score,
-                base.ncollections,
-                base.count,
-                total.cnt
-            {order_by}
+            {children_group_by}
+            ORDER BY
+                (base.match_score + base.collection_score) DESC,
+                CHAR_LENGTH(base.name) ASC,
+                base.concept_id
             LIMIT %s OFFSET %s
         """
 
-        final_bindings = score_bindings + where_bindings + [per_page, offset]
+        final_bindings = (
+            score_bindings
+            + collection_score_bindings
+            + where_bindings
+            + [per_page, offset]
+        )
 
         raw_conn = self._engine.raw_connection()
         try:
@@ -175,7 +170,6 @@ class MySQLConceptResolver(BaseResolver):
         *,
         phrase_first: bool = True,
         max_matches: Optional[int] = 5,
-        use_stats_ordering: bool = False,
         use_collection_filter: bool = False,
         collection_ids: Optional[List[int]] = None,
     ) -> List[Dict[str, Any]]:
@@ -187,7 +181,6 @@ class MySQLConceptResolver(BaseResolver):
             concept_names=[text],
             collection_ids=collection_ids or [],
             use_collection_filter=use_collection_filter,
-            use_stats_ordering=use_stats_ordering,
             include_ancestors=False,
             page=1,
             per_page=max_matches if max_matches is not None else 5,
@@ -199,6 +192,7 @@ class MySQLConceptResolver(BaseResolver):
                 "concept_name": row["name"],
                 "domain_id": row["category"],
                 "match_score": int(row["match_score"] or 0),
+                "collection_score": int(row["collection_score"] or 0),
                 "ncollections": int(row["ncollections"] or 0),
                 "count": int(row["count"]) if row.get("count") is not None else None,
             }

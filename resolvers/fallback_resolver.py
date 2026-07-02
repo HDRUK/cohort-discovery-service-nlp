@@ -17,7 +17,6 @@ class FallbackResolver(BaseResolver):
         *,
         phrase_first=True,
         max_matches=None,
-        use_stats_ordering: bool = False,
         use_collection_filter: bool = False,
         collection_ids: Optional[List[int]] = None,
         **kwargs,
@@ -27,7 +26,6 @@ class FallbackResolver(BaseResolver):
             threshold,
             phrase_first=phrase_first,
             max_matches=max_matches,
-            use_stats_ordering=use_stats_ordering,
             use_collection_filter=use_collection_filter,
             collection_ids=collection_ids,
         )

@@ -8,12 +8,13 @@ from app import app
 client = TestClient(app)
 
 
-def _make_row(concept_id, name, category, match_score, ncollections, count, cnt=None, children=None):
+def _make_row(concept_id, name, category, match_score, ncollections, count, cnt=None, children=None, collection_score=0):
     return {
         "concept_id": concept_id,
         "name": name,
         "category": category,
         "match_score": match_score,
+        "collection_score": collection_score,
         "ncollections": ncollections,
         "count": Decimal(str(count)) if count is not None else None,
         "cnt": cnt if cnt is not None else 1,
@@ -119,37 +120,6 @@ def test_collection_filter_not_applied_when_flag_false():
     assert "d.collection_id IN" not in where_clause
 
 
-def test_stats_ordering_included_when_flag_set():
-    rows = [_make_row(1, "Diabetes", "Condition", 0, 1, 10, cnt=1)]
-    mock_engine, raw_conn = _mock_engine(rows)
-    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
-        response = client.post(
-            "/concepts/search",
-            json={"use_stats_ordering": True, "include_ancestors": False},
-        )
-
-    assert response.status_code == 200
-    call_args = raw_conn.cursor.return_value.execute.call_args
-    sql, _bindings = call_args[0]
-    assert "base.ncollections DESC" in sql
-    assert "base.count DESC" in sql
-
-
-def test_stats_ordering_excluded_when_flag_false():
-    rows = [_make_row(1, "Diabetes", "Condition", 0, 1, 10, cnt=1)]
-    mock_engine, raw_conn = _mock_engine(rows)
-    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
-        response = client.post(
-            "/concepts/search",
-            json={"use_stats_ordering": False, "include_ancestors": False},
-        )
-
-    assert response.status_code == 200
-    call_args = raw_conn.cursor.return_value.execute.call_args
-    sql, _bindings = call_args[0]
-    assert "base.ncollections DESC" not in sql
-
-
 def test_no_search_params_returns_all_rows():
     rows = [
         _make_row(1, "Concept A", "Condition", 0, 1, 10, cnt=2),
@@ -207,6 +177,7 @@ def test_include_ancestors_true_attaches_children():
             "name": "Essential hypertension",
             "category": "Condition",
             "match_score": 1000,
+            "collection_score": 0,
             "ncollections": 1,
             "count": Decimal("50"),
             "cnt": 1,
@@ -233,6 +204,7 @@ def test_children_null_entries_are_filtered():
             "name": "Essential hypertension",
             "category": "Condition",
             "match_score": 1000,
+            "collection_score": 0,
             "ncollections": 1,
             "count": Decimal("50"),
             "cnt": 1,
@@ -362,34 +334,6 @@ def test_medcat_url_not_set_does_not_crash(monkeypatch):
     str_bindings = [b for b in bindings if isinstance(b, str)]
     assert any("ckd" in b.lower() for b in str_bindings)
 
-
-def test_stats_ordering_affects_result_order():
-    """Results ordered by ncollections/count when flag is set vs match_score only when not."""
-    rows_stats = [
-        _make_row(2, "Diabetes mellitus type 2", "Condition", 500, 10, 1000, cnt=2),
-        _make_row(1, "Diabetes", "Condition", 500, 1, 5, cnt=2),
-    ]
-    rows_default = [
-        _make_row(1, "Diabetes", "Condition", 500, 1, 5, cnt=2),
-        _make_row(2, "Diabetes mellitus type 2", "Condition", 500, 10, 1000, cnt=2),
-    ]
-
-    mock_engine_stats, _ = _mock_engine(rows_stats)
-    with patch.object(app.state.sql_resolver, "_engine", mock_engine_stats):
-        resp_stats = client.post(
-            "/concepts/search",
-            json={"concept_name": ["diabetes"], "use_stats_ordering": True, "include_ancestors": False},
-        )
-
-    mock_engine_default, _ = _mock_engine(rows_default)
-    with patch.object(app.state.sql_resolver, "_engine", mock_engine_default):
-        resp_default = client.post(
-            "/concepts/search",
-            json={"concept_name": ["diabetes"], "use_stats_ordering": False, "include_ancestors": False},
-        )
-
-    assert resp_stats.json()["data"][0]["concept_id"] == 2
-    assert resp_default.json()["data"][0]["concept_id"] == 1
 
 
 def test_collection_filter_restricts_results():

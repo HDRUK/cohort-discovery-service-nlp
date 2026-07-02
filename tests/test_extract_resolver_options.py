@@ -48,6 +48,7 @@ _SEARCH_RESULT = {
         "name": "Diabetes",
         "category": "Condition",
         "match_score": 500,
+        "collection_score": 0,
         "ncollections": 2,
         "count": 100,
     }],
@@ -113,27 +114,6 @@ def test_extract_multiple_collection_ids():
     assert response.status_code == 200
     kwargs = mock_search.call_args[1]
     assert kwargs["collection_ids"] == [1, 2, 3]
-
-
-def test_extract_stats_ordering_applied():
-    with _sql_path() as mock_search:
-        response = client.post(
-            "/extract",
-            json={"query": "diabetes", "use_stats_ordering": True},
-        )
-
-    assert response.status_code == 200
-    kwargs = mock_search.call_args[1]
-    assert kwargs["use_stats_ordering"] is True
-
-
-def test_extract_stats_ordering_off_by_default():
-    with _sql_path() as mock_search:
-        response = client.post("/extract", json={"query": "diabetes"})
-
-    assert response.status_code == 200
-    kwargs = mock_search.call_args[1]
-    assert kwargs["use_stats_ordering"] is False
 
 
 def test_extract_returns_concepts_from_resolver():

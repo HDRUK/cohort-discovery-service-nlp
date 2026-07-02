@@ -15,7 +15,11 @@ CONCEPT_MATCH_SCORE_CONTAINS = int(os.getenv("CONCEPT_MATCH_SCORE_CONTAINS", 500
 CONCEPT_MATCH_SCORE_PREFIX = int(os.getenv("CONCEPT_MATCH_SCORE_PREFIX", 100))
 CONCEPT_MATCH_SCORE_SYNONYM = int(os.getenv("CONCEPT_MATCH_SCORE_SYNONYM", 1000))
 CONCEPT_MATCH_SCORE_TOKEN = int(os.getenv("CONCEPT_MATCH_SCORE_TOKEN", 50))
-CONCEPT_MATCH_SCORE_COLLECTION = int(os.getenv("CONCEPT_MATCH_SCORE_COLLECTION", 2000))
+CONCEPT_MATCH_SCORE_COLLECTION = int(os.getenv("CONCEPT_MATCH_SCORE_COLLECTION", 500))
+CONCEPT_MATCH_SCORE_NCOLLECTIONS = int(
+    os.getenv("CONCEPT_MATCH_SCORE_NCOLLECTIONS", 500)
+)
+CONCEPT_MATCH_SCORE_NTOTAL = int(os.getenv("CONCEPT_MATCH_SCORE_NTOTAL", 500))
 
 _rules_path = os.getenv("RULES_PATH", "rules.json")
 with open(_rules_path) as _f:
@@ -46,7 +50,6 @@ class ConceptSearchRequest(BaseModel):
     domain: Optional[str] = None
     collection_ids: Optional[List[int]] = None
     use_collection_filter: bool = False
-    use_stats_ordering: bool = False
     page: int = 1
     per_page: int = 25
     include_ancestors: bool = True
@@ -65,6 +68,7 @@ class ConceptSearchResult(BaseModel):
     name: str
     category: str
     match_score: int
+    collection_score: int
     ncollections: int
     count: Optional[int]
     children: List[ChildConcept] = []
@@ -80,7 +84,7 @@ class ConceptSearchResult(BaseModel):
             data["children"] = [c for c in json.loads(decoded) or [] if c is not None]
         return data
 
-    @field_validator("match_score", "ncollections", mode="before")
+    @field_validator("match_score", "collection_score", "ncollections", mode="before")
     @classmethod
     def _coerce_nullable_int(cls, v: Any) -> int:
         return int(v or 0)
@@ -206,8 +210,8 @@ def build_score_sql(
     medcat_names: list,
     concept_ids: list,
     synonym_concept_ids: Optional[List[int]] = None,
-    collection_ids: Optional[List[int]] = None,
 ) -> tuple:
+    """Row-level text/id scoring only — no aggregates. Safe inside any GROUP BY."""
     clauses: List[str] = []
     bindings: List[Any] = []
 
@@ -254,12 +258,7 @@ def build_score_sql(
 
     for cid in concept_ids:
         clauses.append(
-            f"""
-            CASE
-                WHEN d.concept_id = %s THEN {CONCEPT_MATCH_SCORE_EXACT}
-                ELSE 0
-            END
-            """
+            f"CASE WHEN d.concept_id = %s THEN {CONCEPT_MATCH_SCORE_EXACT} ELSE 0 END"
         )
         bindings.append(cid)
 
@@ -270,18 +269,41 @@ def build_score_sql(
         )
         bindings.extend(synonym_concept_ids)
 
-    if collection_ids:
-        placeholders = ", ".join(["%s"] * len(collection_ids))
-        clauses.append(
-            f"MAX(CASE WHEN d.collection_id IN ({placeholders}) THEN {CONCEPT_MATCH_SCORE_COLLECTION} ELSE 0 END)"
-        )
-        bindings.extend(collection_ids)
-
     score_sql = "(" + " + ".join(clauses) + ")" if clauses else "0"
     return score_sql, bindings
 
 
-def _parse_row(row: dict, include_ancestors: bool) -> "ConceptSearchResult":
+def build_collection_score_sql(
+    collection_ids: Optional[List[int]] = None,
+) -> tuple:
+    """Aggregate collection scoring. All collection-related scoring lives here.
+
+    Three components (when collection_ids provided):
+    - Match boost: flat bonus if the concept appears in any of the target collections
+    - Popularity: ncollections² so concepts in more target collections rank higher super-linearly
+    - Coverage: bonus if the concept has any patient data in those collections
+    """
+    if collection_ids:
+        placeholders = ", ".join(["%s"] * len(collection_ids))
+        sql = (
+            f"MAX(CASE WHEN d.collection_id IN ({placeholders}) THEN {CONCEPT_MATCH_SCORE_COLLECTION} ELSE 0 END)"
+            f" + COUNT(DISTINCT CASE WHEN d.collection_id IN ({placeholders}) THEN d.collection_id END)"
+            f" * COUNT(DISTINCT CASE WHEN d.collection_id IN ({placeholders}) THEN d.collection_id END)"
+            f" * {CONCEPT_MATCH_SCORE_NCOLLECTIONS}"
+            f" + IF(SUM(CASE WHEN d.collection_id IN ({placeholders}) THEN d.count ELSE 0 END) > 0,"
+            f" {CONCEPT_MATCH_SCORE_NTOTAL}, 0)"
+        )
+        bindings = list(collection_ids) * 4
+    else:
+        sql = (
+            f"COUNT(DISTINCT d.collection_id) * COUNT(DISTINCT d.collection_id) * {CONCEPT_MATCH_SCORE_NCOLLECTIONS}"
+            f" + IF(SUM(d.count) > 0, {CONCEPT_MATCH_SCORE_NTOTAL}, 0)"
+        )
+        bindings = []
+    return sql, bindings
+
+
+def _parse_row(row: dict) -> "ConceptSearchResult":
     return ConceptSearchResult.model_validate(row)
 
 
@@ -301,7 +323,6 @@ def search_concepts(
         domain=payload.domain,
         collection_ids=payload.collection_ids,
         use_collection_filter=payload.use_collection_filter,
-        use_stats_ordering=payload.use_stats_ordering,
         include_ancestors=payload.include_ancestors,
         page=page,
         per_page=per_page,
@@ -315,5 +336,5 @@ def search_concepts(
         per_page=per_page,
         current_page=page,
         last_page=last_page,
-        data=[_parse_row(row, payload.include_ancestors) for row in result["data"]],
+        data=[_parse_row(row) for row in result["data"]],
     )
