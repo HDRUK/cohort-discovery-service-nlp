@@ -1,4 +1,5 @@
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
@@ -91,6 +92,15 @@ def get_resolver_store(request: Request) -> ResolverStore:
 # FastAPI app
 app = FastAPI(title="Project Daphne NLP Service", version="1.0", lifespan=lifespan)
 app.include_router(concepts_router)
+
+
+@app.middleware("http")
+async def log_request_time(request: Request, call_next):
+    t0 = time.monotonic()
+    response = await call_next(request)
+    print(f"[Request] {request.method} {request.url.path} {response.status_code} {(time.monotonic() - t0) * 1000:.1f}ms")
+    return response
+
 
 # Parsing engine
 ENGINE = RuleEngine()

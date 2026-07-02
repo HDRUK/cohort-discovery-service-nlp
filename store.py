@@ -55,9 +55,15 @@ class ResolverStore:
 
     async def _refresh(self) -> None:
         async with self._lock:
+            t0 = time.monotonic()
             try:
                 concepts = await asyncio.to_thread(self._loader)
+                t1 = time.monotonic()
+                print(f"[ResolverStore] loader: {t1 - t0:.2f}s ({len(concepts)} concepts)")
+
                 resolver = await asyncio.to_thread(FuzzyConceptResolver, concepts)
+                t2 = time.monotonic()
+                print(f"[ResolverStore] FuzzyConceptResolver init: {t2 - t1:.2f}s")
             except Exception as exc:
                 print(f"[ResolverStore] Refresh failed: {exc}")
                 return
@@ -67,11 +73,14 @@ class ResolverStore:
             if self._postprocess:
                 try:
                     await asyncio.to_thread(self._postprocess, self, concepts)
+                    t3 = time.monotonic()
+                    print(f"[ResolverStore] postprocess: {t3 - t2:.2f}s")
                 except Exception as exc:
                     print(f"[ResolverStore] Postprocess failed: {exc}")
 
             self._resolver = resolver
             self._loaded_at = time.monotonic()
+            print(f"[ResolverStore] total startup: {self._loaded_at - t0:.2f}s")
 
     @property
     def resolver(self) -> Optional[FuzzyConceptResolver]:

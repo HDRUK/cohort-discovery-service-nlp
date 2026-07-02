@@ -2,6 +2,7 @@ import json
 import math
 import os
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -108,6 +109,7 @@ def _get_medcat_names(terms: List[str]) -> List[str]:
     if not medcat_url:
         print("[MedCAT] MEDCAT_URL is not set — skipping expansion")
         return []
+    medcat_t0 = time.monotonic()
     min_acc = float(os.getenv("MEDCAT_MIN_ACC", "0.5"))
     term_set = {t.lower() for t in terms}
     pretty_names = []
@@ -142,6 +144,9 @@ def _get_medcat_names(terms: List[str]) -> List[str]:
                         pretty_names.append(pretty_name)
         except Exception as e:
             print(f"[MedCAT] term={term!r} — error: {e}")
+    print(
+        f"[MedCAT] {(time.monotonic() - medcat_t0) * 1000:.1f}ms terms={len(terms)} expansions={len(pretty_names)}"
+    )
     return pretty_names
 
 
@@ -186,6 +191,7 @@ def build_where_conditions(
         bindings.append(f"%{normalised}%")
 
     for term in medcat_names:
+        print("!!!! extracting medcat anmes")
         term = term.strip()
         if not term:
             continue
@@ -194,10 +200,12 @@ def build_where_conditions(
         bindings.append(f"%{normalised}%")
 
     for token in _extract_medcat_tokens(medcat_names):
+        print("!!!! extracting medcat tokens")
         conditions.append("d.concept_name LIKE %s")
         bindings.append(f"%{token}%")
 
     if synonym_concept_ids:
+        print("!!!! adding synoyms")
         placeholders = ", ".join(["%s"] * len(synonym_concept_ids))
         conditions.append(f"d.concept_id IN ({placeholders})")
         bindings.extend(synonym_concept_ids)
@@ -219,30 +227,31 @@ def build_score_sql(
         term = term.strip()
         if not term:
             continue
+        term_lower = term.lower()
         clauses.append(
             f"""
             CASE
-                WHEN LOWER(d.concept_name) = LOWER(%s) THEN {CONCEPT_MATCH_SCORE_EXACT}
-                WHEN LOWER(d.concept_name) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_CONTAINS}
-                WHEN LOWER(d.concept_name) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_PREFIX}
+                WHEN d.concept_name = %s THEN {CONCEPT_MATCH_SCORE_EXACT}
+                WHEN d.concept_name LIKE %s THEN {CONCEPT_MATCH_SCORE_CONTAINS}
+                WHEN d.concept_name LIKE %s THEN {CONCEPT_MATCH_SCORE_PREFIX}
                 ELSE 0
             END
             """
         )
-        bindings.append(term)
-        bindings.append(f"%{term}%")
-        bindings.append(f"{term}%")
+        bindings.append(term_lower)
+        bindings.append(f"%{term_lower}%")
+        bindings.append(f"{term_lower}%")
 
     for term in medcat_names:
         term = term.strip()
         if not term:
             continue
-        normalised = _normalise_for_like(term, strip_s=True)
+        normalised = _normalise_for_like(term, strip_s=True).lower()
         clauses.append(
             f"""
             CASE
-                WHEN LOWER(d.concept_name) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_CONTAINS}
-                WHEN LOWER(d.concept_name) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_PREFIX}
+                WHEN d.concept_name LIKE %s THEN {CONCEPT_MATCH_SCORE_CONTAINS}
+                WHEN d.concept_name LIKE %s THEN {CONCEPT_MATCH_SCORE_PREFIX}
                 ELSE 0
             END
             """
@@ -252,7 +261,7 @@ def build_score_sql(
 
     for token in _extract_medcat_tokens(medcat_names):
         clauses.append(
-            f"CASE WHEN LOWER(d.concept_name) LIKE LOWER(%s) THEN {CONCEPT_MATCH_SCORE_TOKEN} ELSE 0 END"
+            f"CASE WHEN d.concept_name LIKE %s THEN {CONCEPT_MATCH_SCORE_TOKEN} ELSE 0 END"
         )
         bindings.append(f"%{token}%")
 

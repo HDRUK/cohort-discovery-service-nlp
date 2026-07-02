@@ -25,7 +25,10 @@ class MySQLConceptResolver(BaseResolver):
         domain: Optional[str] = None,
         collection_ids: Optional[List[int]] = None,
         use_collection_filter: bool = False,
-        include_ancestors: bool = True,
+        use_collection_score: bool = False,
+        use_synonym_lookup: bool = False,
+        use_medcat: bool = False,
+        include_ancestors: bool = False,
         page: int = 1,
         per_page: int = 25,
     ) -> Dict[str, Any]:
@@ -33,17 +36,30 @@ class MySQLConceptResolver(BaseResolver):
         concept_ids = concept_ids or []
         concept_names = concept_names or []
 
-        medcat_names = _get_medcat_names(concept_names)
-
-        syn_t0 = time.time()
-        syn_concept_ids = find_synonym_concept_ids(
-            self.synonym_map, concept_names + medcat_names
-        )
         print(
-            f"[Resolver] synonym lookup: {(time.time() - syn_t0) * 1000:.1f}ms concept_ids={syn_concept_ids}"
+            use_collection_filter,
+            use_collection_score,
+            use_synonym_lookup,
+            use_medcat,
+            include_ancestors,
         )
 
-        where = ["d.concept_id IS NOT NULL", "d.concept_id > 0"]
+        medcat_names = []
+        if use_medcat:
+            medcat_names = _get_medcat_names(concept_names)
+
+        syn_concept_ids = None
+        if use_synonym_lookup:
+            syn_t0 = time.monotonic()
+            syn_concept_ids = find_synonym_concept_ids(
+                self.synonym_map, concept_names + medcat_names
+            )
+            print(
+                f"[Resolver] synonym lookup: {(time.monotonic() - syn_t0) * 1000:.1f}ms enabled={use_synonym_lookup}"
+            )
+
+        # where = ["d.concept_id IS NOT NULL", "d.concept_id > 0"]
+        where = []
         where_bindings: List[Any] = []
 
         if use_collection_filter and collection_ids:
@@ -65,9 +81,13 @@ class MySQLConceptResolver(BaseResolver):
             syn_concept_ids,
         )
 
-        collection_score_sql, collection_score_bindings = build_collection_score_sql(
-            collection_ids or []
-        )
+        collection_score_sql = None
+        collection_score_bindings = None
+        if use_collection_score:
+            print("!!!! building collection score")
+            collection_score_sql, collection_score_bindings = (
+                build_collection_score_sql(collection_ids)
+            )
 
         if search_conds:
             where.append("(" + " OR ".join(search_conds) + ")")
@@ -111,7 +131,7 @@ class MySQLConceptResolver(BaseResolver):
                     d.concept_name as name,
                     d.domain_id as category,
                     {score_sql} AS match_score,
-                    {collection_score_sql} AS collection_score,
+                    {collection_score_sql if collection_score_sql else "0"} AS collection_score,
                     COUNT(DISTINCT d.collection_id) AS ncollections,
                     SUM(d.count) AS count
                 FROM latest_distributions d
@@ -130,7 +150,7 @@ class MySQLConceptResolver(BaseResolver):
             {children_join}
             {children_group_by}
             ORDER BY
-                (base.match_score + base.collection_score) DESC,
+                {"(base.match_score + base.collection_score)" if use_collection_score else "base.match_score"} DESC,
                 CHAR_LENGTH(base.name) ASC,
                 base.concept_id
             LIMIT %s OFFSET %s
@@ -138,7 +158,11 @@ class MySQLConceptResolver(BaseResolver):
 
         final_bindings = (
             score_bindings
-            + collection_score_bindings
+            + (
+                collection_score_bindings
+                if use_collection_score and collection_score_bindings
+                else []
+            )
             + where_bindings
             + [per_page, offset]
         )
@@ -146,16 +170,19 @@ class MySQLConceptResolver(BaseResolver):
         raw_conn = self._engine.raw_connection()
         try:
             cursor = raw_conn.cursor(dictionary=True)
-            main_t0 = time.time()
+            main_t0 = time.monotonic()
             cursor.execute(sql, final_bindings)
             rows = cursor.fetchall()
-            collection_info = (
-                f"collection_ids={collection_ids}"
-                if use_collection_filter and collection_ids
-                else "collection_filter=off"
-            )
+            print("=----------------")
+            print(cursor.statement)
+            print("=----------------")
             print(
-                f"[Resolver] main query: {(time.time() - main_t0) * 1000:.1f}ms synonym_ids={syn_concept_ids} {collection_info} results={len(rows)}"
+                f"[Resolver] main query: {(time.monotonic() - main_t0) * 1000:.1f}ms"
+                f" collection_filter={use_collection_filter}"
+                f" collection_score={use_collection_score}"
+                f" ancestors={include_ancestors}"
+                f" collection_ids={collection_ids if use_collection_filter and collection_ids else None}"
+                f" results={len(rows)}"
             )
         finally:
             raw_conn.close()
