@@ -63,6 +63,12 @@ async def lifespan(app: FastAPI):
         store.synonym_map = load_synonym_map(OMOP_DB_CONFIG, [c["concept_id"] for c in concepts])
         store.acronym_index = ENGINE.build_acronym_index(concepts)
 
+    # Concepts are loaded at startup for three reasons:
+    #   1. FuzzyConceptResolver — iterates the full list on every resolve (RESOLVER_BACKEND=fuzzy).
+    #   2. synonym_map — built from concept IDs; also used by MySQLConceptResolver at request time.
+    #   3. acronym_index — built from concept names; used by QueryParser for acronym expansion.
+    # If RESOLVER_BACKEND=sql is permanent and the fuzzy fallback in FallbackResolver is removed,
+    # this load could be replaced by a lighter synonym-only query. Refactor candidate.
     store = ResolverStore(
         lambda: load_concepts_from_mysql(db_engine),
         ttl_seconds=STORE_REFRESH_TTL,
