@@ -21,8 +21,24 @@ class ResolverStore:
         self._resolver: Optional[FuzzyConceptResolver] = None
 
         # Shared data updated by postprocess on each refresh; read by all resolvers.
-        self.synonym_map: Dict[int, List[str]] = {}
-        self.acronym_index: Dict[str, List[str]] = {}
+        self._synonym_map: Dict[int, List[str]] = {}
+        self._acronym_index: Dict[str, List[str]] = {}
+
+    @property
+    def synonym_map(self) -> Dict[int, List[str]]:
+        return self._synonym_map
+
+    @synonym_map.setter
+    def synonym_map(self, value: Dict[int, List[str]]) -> None:
+        self._synonym_map = value
+
+    @property
+    def acronym_index(self) -> Dict[str, List[str]]:
+        return self._acronym_index
+
+    @acronym_index.setter
+    def acronym_index(self, value: Dict[str, List[str]]) -> None:
+        self._acronym_index = value
 
     async def get_resolver(self) -> FuzzyConceptResolver:
         now = time.monotonic()
