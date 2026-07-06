@@ -6,28 +6,39 @@ on:
     branches:
       - dev
 
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Environment
+        required: true
+        default: dev-standalone
+        type: choice
+        options:
+          - dev-standalone
+
 jobs:
-  build-standalone:
+  build:
     uses: HDRUK/github-actions-templates/.github/workflows/docker-build.yaml@main
     with:
       chart_path: chart/cohort-nlp/Chart.yaml
-      environment: dev-standalone
+      environment: ${{ github.event_name == 'push' && 'dev-integrated' || 'dev-standalone' }}
     secrets: inherit
 
   deploy-standalone:
-    needs: build-standalone
+    needs: build
     uses: HDRUK/github-actions-templates/.github/workflows/deploy-release.yml@main
     with:
       env: dev-standalone
       chart_path: chart/cohort-nlp/Chart.yaml
-      git_ref: dev
+      git_ref: 
     secrets: inherit
 
   deploy-integrated:
-    needs: build-standalone
+    if: github.event_name == 'push'
+    needs: build
     uses: HDRUK/github-actions-templates/.github/workflows/deploy-release.yml@main
     with:
       env: dev-integrated
       chart_path: chart/cohort-nlp/Chart.yaml
-      git_ref: dev
+      git_ref: ${{ github.ref_name }}
     secrets: inherit
