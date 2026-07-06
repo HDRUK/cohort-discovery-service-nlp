@@ -30,7 +30,7 @@ jobs:
     with:
       env: dev-standalone
       chart_path: chart/cohort-nlp/Chart.yaml
-      git_ref: 
+      git_ref: ${{ github.ref_name }}
     secrets: inherit
 
   deploy-integrated:
@@ -40,5 +40,5 @@ jobs:
     with:
       env: dev-integrated
       chart_path: chart/cohort-nlp/Chart.yaml
-      git_ref: ${{ github.ref_name }}
+      git_ref: dev
     secrets: inherit
