@@ -55,8 +55,9 @@ _MEDCAT_TOKEN_MIN_LEN: int = _medcat_rules.get("token_min_len", 8)
 # Collection score is quantised into small buckets. In the population branch it stays a
 # sub-tier nudge (max 80 < the prefix match tier of 100) — reordering concepts within a
 # match tier by popularity without ever outranking a better text match. The targeted
-# branch additionally applies a strong penalty to concepts in none of the selected
-# collections (see _TARGET_MISS_PENALTY).
+# branch buckets the same ncollections/count tiers over the concept's totals *within the
+# selected collections* (target_ncollections / target_count), and additionally applies a
+# strong penalty to concepts in none of the selected collections (see _TARGET_MISS_PENALTY).
 _NCOLLECTIONS_TIERS = [(11, 40), (6, 30), (2, 20), (1, 10)]  # ">10",">5",">=2","=1"
 _COUNT_TIERS = [
     (1_000_000, 70),
@@ -316,6 +317,8 @@ def build_collection_score_cte(
             {_bucketed("COUNT(DISTINCT d.collection_id)", _NCOLLECTIONS_TIERS)}
             + {_bucketed("SUM(d.count)", _COUNT_TIERS)}
         """
+        log.debug("---> not using collection_ids")
+        log.debug(population_score)
         return CollectionScore(SqlFragment("", []), population_score, "", [])
 
     bindings = list(collection_ids)
@@ -329,16 +332,25 @@ def build_collection_score_cte(
                 COUNT(DISTINCT collection_id) AS target_ncollections,
                 SUM(count) AS target_count
             FROM latest_distributions
-            WHERE collection_id IN ({_placeholders(collection_ids)}){candidate_clause}
+            WHERE collection_id IN ({_placeholders(collection_ids)})
+            {candidate_clause}
             GROUP BY concept_id
         ),"""
     ncollections_whens = " ".join(
         f"WHEN COALESCE(cs.target_ncollections, 0) >= {t} THEN {p}"
         for t, p in _NCOLLECTIONS_TIERS
     )
-    target_score = f"CASE {ncollections_whens} ELSE -{_TARGET_MISS_PENALTY} END"
+    count_score = _bucketed("COALESCE(cs.target_count, 0)", _COUNT_TIERS)
+    target_score = (
+        f"(CASE {ncollections_whens} ELSE -{_TARGET_MISS_PENALTY} END) + {count_score}"
+    )
     join_sql = "LEFT JOIN collection_stats cs ON cs.concept_id = d.concept_id"
     group_cols = ["cs.target_ncollections", "cs.target_count"]
+
+    log.debug("----> using collections score")
+    log.debug(target_score)
+    log.debug(ncollections_whens)
+
     return CollectionScore(
         SqlFragment(cte_sql, bindings), target_score, join_sql, group_cols
     )

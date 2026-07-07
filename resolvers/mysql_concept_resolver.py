@@ -219,9 +219,12 @@ class MySQLConceptResolver(BaseResolver):
         offset = (page - 1) * per_page
         is_targeted = bool(collection.cte.sql)
         ncollections_expr = (
-            "COALESCE(cs.target_ncollections, 0)" if is_targeted else "COUNT(DISTINCT d.collection_id)"
+            "COALESCE(cs.target_ncollections, 0)"
+            if is_targeted
+            else "COUNT(DISTINCT d.collection_id)"
         )
         count_expr = "COALESCE(cs.target_count, 0)" if is_targeted else "SUM(d.count)"
+
         with_clause = f"WITH {collection.cte.sql}" if collection.cte.sql else "WITH"
         order_score = (
             "(base.match_score + base.collection_score)"
