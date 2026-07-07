@@ -6,10 +6,15 @@ from resolvers import MySQLConceptResolver
 
 class _MinimalStore:
     synonym_map = {}
+    synonym_token_index = {}
+    name_token_index = {}
     acronym_index = {}
     ancestor_map = {}
     concepts_by_id = {}
-    resolver = None
+    # Truthy sentinel: endpoint tests exercise the fully-warm path. `resolver` being
+    # non-None is the resolver's "warm-up complete" signal; reduced-mode behaviour is
+    # covered separately (see _ColdStore in test_resolver_performance_paths.py).
+    resolver = object()
 
     async def get_resolver(self):
         return self.resolver

@@ -55,6 +55,22 @@ class MySQLConceptResolver(BaseResolver):
         concept_ids = concept_ids or []
         concept_names = concept_names or []
 
+        # During background warm-up the in-memory indexes aren't populated yet
+        # (store.resolver is set only once every index is built — the same "fully
+        # warm" signal used by /health/ready). Skip the enrichment steps that
+        # depend on that state and serve a simple LIKE-matched result, so requests
+        # aren't slowed by MedCAT / collection-score work on top of the LIKE scan.
+        warm = self._store is not None and self._store.resolver is not None
+        if not warm:
+            use_medcat = False
+            use_synonym_lookup = False
+            use_collection_score = False
+            include_ancestors = False
+            log.info(
+                "[Resolver] reduced mode (warm-up in progress): skipping"
+                " medcat/synonym/collection-score/ancestors"
+            )
+
         medcat_names = self._expand_medcat(concept_names, use_medcat)
         syn_concept_ids = self._synonym_ids(
             concept_names + medcat_names, use_synonym_lookup

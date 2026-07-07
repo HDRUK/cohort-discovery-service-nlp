@@ -8,8 +8,10 @@ from logging_config import get_logger
 log = get_logger()
 
 
-def load_ancestor_map(db_config: Dict[str, Any], concept_ids: List[int]) -> Dict[int, List[int]]:
-    """Load parent -> [child_concept_id, ...] edges from concept_ancestors.
+def load_ancestor_map(
+    db_config: Dict[str, Any], concept_ids: List[int]
+) -> Dict[int, List[int]]:
+    """Load parent -> [child_concept_id, ...] edges from concept_ancestor.
 
     Bounded to the given concept_ids on BOTH sides: the child side reproduces the
     old SQL's "child must exist in latest_distributions" filter (concept_ids IS the
@@ -24,25 +26,28 @@ def load_ancestor_map(db_config: Dict[str, Any], concept_ids: List[int]) -> Dict
     conn = None
     try:
         log.debug(
-            f"[Start-up] Loading concept_ancestors from db='{db_config.get('database')}'"
+            f"[Start-up] Loading concept_ancestor from db='{db_config.get('database')}'"
             f" on host='{db_config.get('host')}'"
         )
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
-        cursor.execute("SHOW TABLES LIKE 'concept_ancestors'")
+        cursor.execute("SHOW TABLES LIKE 'concept_ancestor'")
         exists = cursor.fetchone()
         cursor.close()
         if not exists:
-            log.warning("[Start-up] concept_ancestors table not found — child concepts disabled")
+            log.warning(
+                "[Start-up] concept_ancestor table not found — child concepts disabled"
+            )
             return {}
         placeholders = ",".join(["%s"] * len(concept_ids))
         t1 = time.monotonic()
         cursor = conn.cursor(dictionary=True)
         cursor.execute(
-            f"SELECT parent_concept_id, child_concept_id FROM concept_ancestors"
-            f" WHERE parent_concept_id IN ({placeholders})"
-            f" AND child_concept_id IN ({placeholders})"
-            f" AND parent_concept_id != child_concept_id",
+            f"SELECT ancestor_concept_id, descendant_concept_id FROM concept_ancestor"
+            f" WHERE ancestor_concept_id IN ({placeholders})"
+            f" AND descendant_concept_id IN ({placeholders})"
+            f" AND ancestor_concept_id != descendant_concept_id"
+            f" AND min_levels_of_separation = 1",
             concept_ids + concept_ids,
         )
         rows = cursor.fetchall()
@@ -50,8 +55,12 @@ def load_ancestor_map(db_config: Dict[str, Any], concept_ids: List[int]) -> Dict
         # Dedup children per parent (accumulate into sets, then materialise sorted lists).
         acc: Dict[int, set] = {}
         for row in rows:
-            acc.setdefault(int(row["parent_concept_id"]), set()).add(int(row["child_concept_id"]))
-        result: Dict[int, List[int]] = {pid: sorted(children) for pid, children in acc.items()}
+            acc.setdefault(int(row["ancestor_concept_id"]), set()).add(
+                int(row["descendant_concept_id"])
+            )
+        result: Dict[int, List[int]] = {
+            pid: sorted(children) for pid, children in acc.items()
+        }
         total_edges = sum(len(v) for v in result.values())
         t3 = time.monotonic()
         log.info(

@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
@@ -98,41 +99,38 @@ async def lifespan(app: FastAPI):
     app.state.db_engine = db_engine
 
     def enrich_resolver(store, concepts):
-        s0 = time.monotonic()
-        store.synonym_map = load_synonym_map(
-            OMOP_DB_CONFIG, [c["concept_id"] for c in concepts]
-        )
-        s1 = time.monotonic()
-        log.info(
-            f"[warmup] postprocess.load_synonym_map: {s1 - s0:.2f}s ({len(store.synonym_map)} concepts, {_fmt_bytes(_deep_sizeof(store.synonym_map))})"
-        )
-        store.synonym_token_index = build_synonym_token_index(store.synonym_map)
-        s2 = time.monotonic()
-        log.info(
-            f"[warmup] postprocess.build_synonym_token_index: {s2 - s1:.2f}s ({len(store.synonym_token_index)} tokens, {_fmt_bytes(_deep_sizeof(store.synonym_token_index))})"
-        )
-        store.acronym_index = ENGINE.build_acronym_index(concepts)
-        s3 = time.monotonic()
-        log.info(
-            f"[warmup] postprocess.build_acronym_index: {s3 - s2:.2f}s ({len(store.acronym_index)} acronyms, {_fmt_bytes(_deep_sizeof(store.acronym_index))})"
-        )
-        store.name_token_index = build_name_token_index(concepts)
-        s4 = time.monotonic()
-        log.info(
-            f"[warmup] postprocess.build_name_token_index: {s4 - s3:.2f}s ({len(store.name_token_index)} tokens, {_fmt_bytes(_deep_sizeof(store.name_token_index))})"
-        )
-        store.ancestor_map = load_ancestor_map(
-            OMOP_DB_CONFIG, [c["concept_id"] for c in concepts]
-        )
-        s5 = time.monotonic()
-        log.info(
-            f"[warmup] postprocess.load_ancestor_map: {s5 - s4:.2f}s ({len(store.ancestor_map)} parents, {_fmt_bytes(_deep_sizeof(store.ancestor_map))})"
-        )
-        store.concepts_by_id = build_concepts_by_id(concepts)
-        s6 = time.monotonic()
-        log.info(
-            f"[warmup] postprocess.build_concepts_by_id: {s6 - s5:.2f}s ({len(store.concepts_by_id)} concepts, {_fmt_bytes(_deep_sizeof(store.concepts_by_id))})"
-        )
+        # The six derived lookups are largely independent; only synonym_token_index
+        # depends on synonym_map (so they share one task). Running them concurrently
+        # overlaps the two I/O-bound DB queries (synonym + ancestor) with each other
+        # and with the CPU builds — the GIL still serialises the CPU work, but the DB
+        # socket waits release it, which is where most of the warm-up time goes.
+        concept_ids = [c["concept_id"] for c in concepts]
+
+        def _timed(name, fn):
+            t0 = time.monotonic()
+            result = fn()
+            log.info(f"[warmup] postprocess.{name}: {time.monotonic() - t0:.2f}s")
+            return result
+
+        def _load_synonyms():
+            m = load_synonym_map(OMOP_DB_CONFIG, concept_ids)
+            return m, build_synonym_token_index(m)
+
+        p0 = time.monotonic()
+        with ThreadPoolExecutor(max_workers=5, thread_name_prefix="warmup") as ex:
+            f_syn = ex.submit(_timed, "synonym_map+token_index", _load_synonyms)
+            f_acr = ex.submit(_timed, "build_acronym_index", lambda: ENGINE.build_acronym_index(concepts))
+            f_name = ex.submit(_timed, "build_name_token_index", lambda: build_name_token_index(concepts))
+            f_anc = ex.submit(_timed, "load_ancestor_map", lambda: load_ancestor_map(OMOP_DB_CONFIG, concept_ids))
+            f_cbi = ex.submit(_timed, "build_concepts_by_id", lambda: build_concepts_by_id(concepts))
+
+            store.synonym_map, store.synonym_token_index = f_syn.result()
+            store.acronym_index = f_acr.result()
+            store.name_token_index = f_name.result()
+            store.ancestor_map = f_anc.result()
+            store.concepts_by_id = f_cbi.result()
+        log.info(f"[warmup] postprocess: all lookups built in {time.monotonic() - p0:.2f}s (concurrent)")
+
         total_bytes = sum(
             _deep_sizeof(m)
             for m in (

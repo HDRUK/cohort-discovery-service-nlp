@@ -157,6 +157,51 @@ def test_include_ancestors_hydrates_children_from_map():
 
 
 # --------------------------------------------------------------------------
+# reduced mode during warm-up (store.resolver is None) -> skip enrichment
+# --------------------------------------------------------------------------
+class _ColdStore:
+    """Store mid warm-up: resolver not yet set, indexes still empty."""
+
+    def __init__(self):
+        self.resolver = None
+        self.synonym_map = {}
+        self.synonym_token_index = {}
+        self.acronym_index = {}
+        self.name_token_index = {}
+        self.ancestor_map = {}
+        self.concepts_by_id = {}
+
+
+def test_reduced_mode_uses_like_and_skips_extras():
+    rows = [{"concept_id": 24006, "name": "Sickle cell-hemoglobin C disease",
+             "category": "Condition", "match_score": 500, "collection_score": 0,
+             "ncollections": 1, "count": 10, "cnt": 1}]
+    engine, cursor = _mock_engine(rows)
+    cursor.fetchone.return_value = {"cnt": 1}
+    medcat = MagicMock()
+    resolver = MySQLConceptResolver(engine, _ColdStore(), medcat_client=medcat)
+
+    # Ask for everything; warm-up should force it all off.
+    resolver.search(
+        concept_names=["sickle"],
+        collection_ids=[1, 3],
+        include_ancestors=True,
+        use_medcat=True,
+        use_synonym_lookup=True,
+        use_collection_score=True,
+    )
+
+    # MedCAT is not called while warming up.
+    medcat.expand.assert_not_called()
+
+    sql, bindings = cursor.execute.call_args[0]  # last call == main query
+    assert "d.concept_name LIKE" in sql          # LIKE fallback, no name-token index
+    assert "collection_stats AS" not in sql      # collection scoring skipped
+    assert "d.concept_id IN" not in sql          # no fast candidate pre-filter
+    assert sql.count("%s") == len(bindings)       # placeholder/binding alignment guard
+
+
+# --------------------------------------------------------------------------
 # collection_stats CTE bounded to candidate ids (cold-scan optimisation)
 # --------------------------------------------------------------------------
 def test_collection_cte_bounded_to_candidate_ids():
