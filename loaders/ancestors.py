@@ -13,14 +13,9 @@ def load_ancestor_map(
 ) -> Dict[int, List[int]]:
     """Load parent -> [child_concept_id, ...] edges from concept_ancestor.
 
-    Bounded to the given concept_ids: the parent side is filtered in SQL (parents
-    outside the result set can never be a base row), and the child side ("child must
-    exist in latest_distributions", concept_ids IS that id set) is applied in Python.
-    Filtering children in Python rather than a second SQL `IN (...)` avoids a
-    pathological double-IN cross-filter over the full id list — the single-sided query
-    is far cheaper on the DB, which keeps a genuine refresh from starving live requests.
-    Self-referential rows (parent == child) are excluded so a concept never lists itself
-    as its own child. Returns {} if the table doesn't exist or on any error.
+    Bounded to concept_ids: the parent side is filtered in SQL; the child side is
+    filtered in Python (avoids a costly double-IN cross-filter over the full id list).
+    Self-referential rows are excluded. Returns {} if the table is missing or on error.
     """
     if not concept_ids:
         return {}
@@ -54,8 +49,7 @@ def load_ancestor_map(
         )
         rows = cursor.fetchall()
         t2 = time.monotonic()
-        # Dedup children per parent (accumulate into sets, then materialise sorted lists).
-        # Child-side bound applied here: skip descendants not in the loaded concept set.
+        # Dedup children per parent; skip descendants not in the loaded concept set.
         acc: Dict[int, set] = {}
         for row in rows:
             child = int(row["descendant_concept_id"])

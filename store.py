@@ -25,9 +25,7 @@ class ResolverStore:
         self._lock = asyncio.Lock()
         self._refresh_task: Optional[asyncio.Task] = None
 
-        # Cheap change-detection probe (e.g. COUNT/MAX over the source tables). When set,
-        # a periodic refresh runs this first and skips the expensive reload if the result
-        # matches the last successful load. None disables skipping (always reload).
+        # Cheap change-detection probe; when it matches the last load, skip the reload.
         self._fingerprint = fingerprint
         self._last_fingerprint: Any = None
 
@@ -190,11 +188,8 @@ class ResolverStore:
                     except Exception as exc:
                         log.info(f"[warmup] snapshot restore failed ({exc}); falling back to live load")
 
-            # Skip the expensive reload when the source data is unchanged. The probe is a
-            # handful of cheap COUNT/MAX queries; if it matches the last successful load we
-            # keep the current warmed state and just reset the TTL clock. Bypassed on the
-            # first load (no resolver yet) and on any probe error (reload rather than risk
-            # serving nothing).
+            # Skip the reload when the probe matches the last load. Bypassed on first load
+            # (no resolver) and on probe error (reload rather than skip blindly).
             fp: Any = None
             if self._fingerprint and self._resolver:
                 try:
@@ -236,9 +231,8 @@ class ResolverStore:
             self._loaded_at = time.monotonic()
             log.info(f"[warmup] READY — full mode ({label} load complete: {self._loaded_at - t0:.2f}s)")
 
-            # Record the fingerprint of the data we just loaded so the next cycle can skip
-            # when nothing changed. On the first load fp was not computed above (no resolver
-            # to compare against yet), so capture it now.
+            # Record this load's fingerprint for the next cycle (on first load fp is
+            # still None here, so compute it now).
             if self._fingerprint:
                 if fp is None:
                     try:

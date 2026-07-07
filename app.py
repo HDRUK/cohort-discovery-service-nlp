@@ -106,9 +106,7 @@ def _scalar(raw_conn, sql: str):
 
 
 def _best_effort_scalar(raw_conn, sql: str):
-    """Like _scalar but returns None instead of raising — used for the optional OMOP
-    tables in the fingerprint probe so a missing/absent table contributes a stable
-    None rather than wedging the whole probe (which would force a reload every cycle)."""
+    """Like _scalar but returns None instead of raising (for optional OMOP tables)."""
     try:
         return _scalar(raw_conn, sql)
     except Exception:
@@ -120,22 +118,14 @@ async def lifespan(app: FastAPI):
     db_engine = _build_engine(DB_CONFIG)
     app.state.db_engine = db_engine
 
-    # Dedicated small engine for background refresh work (concept load + fingerprint
-    # probe) so the refresh never borrows a connection from the live-request pool.
+    # Dedicated engine for refresh work so it never borrows the live-request pool.
     refresh_engine = _build_engine(DB_CONFIG, pool_size=1, max_overflow=1)
     app.state.refresh_engine = refresh_engine
 
     def fingerprint():
-        """Cheap change-detection probe: skip the reload when the source data is unchanged.
-
-        COUNT+MAX on latest_distributions (the table regenerated when distributions
-        change) is the primary signal and is authoritative — if it errors the whole
-        probe raises and the store falls back to a full reload. The OMOP tables (which
-        may live in a different database on the same server, hence the qualified names)
-        are best-effort: absent/erroring counts contribute a stable None.
-        Blind spot: an in-place edit preserving row count and MAX(concept_id) is not
-        detected — acceptable for wholesale-regenerated distributions + static OMOP vocab.
-        """
+        """Cheap COUNT/MAX probe so an unchanged dataset skips the reload. The
+        latest_distributions row is authoritative (errors force a reload); the OMOP
+        counts are best-effort (qualified names in case OMOP is a separate DB)."""
         omop_db = OMOP_DB_CONFIG["database"]
         raw = refresh_engine.raw_connection()
         try:
@@ -151,11 +141,8 @@ async def lifespan(app: FastAPI):
             raw.close()
 
     def enrich_resolver(store, concepts):
-        # The CPU-only builds (acronym / name-token / concepts_by_id) never touch MySQL,
-        # so they run concurrently in the pool. The two DB queries (synonym, ancestor) are
-        # run SEQUENTIALLY on this thread — deliberately not overlapped — so at most one
-        # heavy query hits MySQL at a time. This protects live-request latency during a
-        # genuine reload (concurrent DB loads previously saturated the server).
+        # CPU builds run concurrently (no DB); the synonym + ancestor DB loads run
+        # sequentially so only one heavy query hits MySQL at a time during a reload.
         concept_ids = [c["concept_id"] for c in concepts]
 
         def _timed(name, fn):
@@ -184,7 +171,6 @@ async def lifespan(app: FastAPI):
                 _timed, "build_concepts_by_id", lambda: build_concepts_by_id(concepts)
             )
 
-            # DB-bound loads: sequential, one MySQL query in flight at a time.
             store.synonym_map, store.synonym_token_index = _timed(
                 "synonym_map+token_index", _load_synonyms
             )
