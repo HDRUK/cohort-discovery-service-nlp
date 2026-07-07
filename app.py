@@ -58,7 +58,7 @@ def _fmt_bytes(n: int) -> str:
 # Load environment variables
 load_dotenv()
 
-STORE_REFRESH_TTL = int(os.getenv("STORE_REFRESH_TTL", 60))
+STORE_REFRESH_TTL = int(os.getenv("STORE_REFRESH_TTL", 300))
 RESOLVER_BACKEND = os.getenv("RESOLVER_BACKEND", "sql")
 APP_ENV = os.getenv("APP_ENV", "production").lower()
 
@@ -119,17 +119,33 @@ async def lifespan(app: FastAPI):
         p0 = time.monotonic()
         with ThreadPoolExecutor(max_workers=5, thread_name_prefix="warmup") as ex:
             f_syn = ex.submit(_timed, "synonym_map+token_index", _load_synonyms)
-            f_acr = ex.submit(_timed, "build_acronym_index", lambda: ENGINE.build_acronym_index(concepts))
-            f_name = ex.submit(_timed, "build_name_token_index", lambda: build_name_token_index(concepts))
-            f_anc = ex.submit(_timed, "load_ancestor_map", lambda: load_ancestor_map(OMOP_DB_CONFIG, concept_ids))
-            f_cbi = ex.submit(_timed, "build_concepts_by_id", lambda: build_concepts_by_id(concepts))
+            f_acr = ex.submit(
+                _timed,
+                "build_acronym_index",
+                lambda: ENGINE.build_acronym_index(concepts),
+            )
+            f_name = ex.submit(
+                _timed,
+                "build_name_token_index",
+                lambda: build_name_token_index(concepts),
+            )
+            f_anc = ex.submit(
+                _timed,
+                "load_ancestor_map",
+                lambda: load_ancestor_map(OMOP_DB_CONFIG, concept_ids),
+            )
+            f_cbi = ex.submit(
+                _timed, "build_concepts_by_id", lambda: build_concepts_by_id(concepts)
+            )
 
             store.synonym_map, store.synonym_token_index = f_syn.result()
             store.acronym_index = f_acr.result()
             store.name_token_index = f_name.result()
             store.ancestor_map = f_anc.result()
             store.concepts_by_id = f_cbi.result()
-        log.info(f"[warmup] postprocess: all lookups built in {time.monotonic() - p0:.2f}s (concurrent)")
+        log.info(
+            f"[warmup] postprocess: all lookups built in {time.monotonic() - p0:.2f}s (concurrent)"
+        )
 
         total_bytes = sum(
             _deep_sizeof(m)
