@@ -13,15 +13,18 @@ def load_ancestor_map(
 ) -> Dict[int, List[int]]:
     """Load parent -> [child_concept_id, ...] edges from concept_ancestor.
 
-    Bounded to the given concept_ids on BOTH sides: the child side reproduces the
-    old SQL's "child must exist in latest_distributions" filter (concept_ids IS the
-    latest_distributions id set), and the parent side is a size optimisation (parents
-    outside the result set can never be a base row). Self-referential rows
-    (parent == child) are excluded so a concept never lists itself as its own child.
-    Returns {} if the table doesn't exist or on any error.
+    Bounded to the given concept_ids: the parent side is filtered in SQL (parents
+    outside the result set can never be a base row), and the child side ("child must
+    exist in latest_distributions", concept_ids IS that id set) is applied in Python.
+    Filtering children in Python rather than a second SQL `IN (...)` avoids a
+    pathological double-IN cross-filter over the full id list — the single-sided query
+    is far cheaper on the DB, which keeps a genuine refresh from starving live requests.
+    Self-referential rows (parent == child) are excluded so a concept never lists itself
+    as its own child. Returns {} if the table doesn't exist or on any error.
     """
     if not concept_ids:
         return {}
+    concept_id_set = set(concept_ids)
     t0 = time.monotonic()
     conn = None
     try:
@@ -45,19 +48,20 @@ def load_ancestor_map(
         cursor.execute(
             f"SELECT ancestor_concept_id, descendant_concept_id FROM concept_ancestor"
             f" WHERE ancestor_concept_id IN ({placeholders})"
-            f" AND descendant_concept_id IN ({placeholders})"
             f" AND ancestor_concept_id != descendant_concept_id"
             f" AND min_levels_of_separation = 1",
-            concept_ids + concept_ids,
+            concept_ids,
         )
         rows = cursor.fetchall()
         t2 = time.monotonic()
         # Dedup children per parent (accumulate into sets, then materialise sorted lists).
+        # Child-side bound applied here: skip descendants not in the loaded concept set.
         acc: Dict[int, set] = {}
         for row in rows:
-            acc.setdefault(int(row["ancestor_concept_id"]), set()).add(
-                int(row["descendant_concept_id"])
-            )
+            child = int(row["descendant_concept_id"])
+            if child not in concept_id_set:
+                continue
+            acc.setdefault(int(row["ancestor_concept_id"]), set()).add(child)
         result: Dict[int, List[int]] = {
             pid: sorted(children) for pid, children in acc.items()
         }

@@ -17,12 +17,19 @@ class ResolverStore:
         ttl_seconds: int,
         postprocess: Optional[Callable[["ResolverStore", List[Dict[str, Any]]], None]] = None,
         cache_path: Optional[str] = None,
+        fingerprint: Optional[Callable[[], Any]] = None,
     ):
         self._loader = loader
         self._ttl = ttl_seconds
         self._postprocess = postprocess
         self._lock = asyncio.Lock()
         self._refresh_task: Optional[asyncio.Task] = None
+
+        # Cheap change-detection probe (e.g. COUNT/MAX over the source tables). When set,
+        # a periodic refresh runs this first and skips the expensive reload if the result
+        # matches the last successful load. None disables skipping (always reload).
+        self._fingerprint = fingerprint
+        self._last_fingerprint: Any = None
 
         # Dev-only warm-up snapshot cache. When set, the fully warmed state is pickled to
         # this path so uvicorn --reload restores it instead of re-querying MySQL and
@@ -183,6 +190,23 @@ class ResolverStore:
                     except Exception as exc:
                         log.info(f"[warmup] snapshot restore failed ({exc}); falling back to live load")
 
+            # Skip the expensive reload when the source data is unchanged. The probe is a
+            # handful of cheap COUNT/MAX queries; if it matches the last successful load we
+            # keep the current warmed state and just reset the TTL clock. Bypassed on the
+            # first load (no resolver yet) and on any probe error (reload rather than risk
+            # serving nothing).
+            fp: Any = None
+            if self._fingerprint and self._resolver:
+                try:
+                    fp = await asyncio.to_thread(self._fingerprint)
+                except Exception as exc:
+                    log.info(f"[warmup] fingerprint probe failed ({exc}); doing full reload")
+                    fp = None
+                if fp is not None and fp == self._last_fingerprint:
+                    log.info("[warmup] data unchanged (fingerprint match) — skipping reload")
+                    self._loaded_at = time.monotonic()
+                    return
+
             try:
                 log.info(f"[warmup] loader: querying concepts ({label})")
                 concepts = await asyncio.to_thread(self._loader)
@@ -211,6 +235,18 @@ class ResolverStore:
             self._resolver = resolver
             self._loaded_at = time.monotonic()
             log.info(f"[warmup] READY — full mode ({label} load complete: {self._loaded_at - t0:.2f}s)")
+
+            # Record the fingerprint of the data we just loaded so the next cycle can skip
+            # when nothing changed. On the first load fp was not computed above (no resolver
+            # to compare against yet), so capture it now.
+            if self._fingerprint:
+                if fp is None:
+                    try:
+                        fp = await asyncio.to_thread(self._fingerprint)
+                    except Exception as exc:
+                        log.info(f"[warmup] fingerprint capture failed ({exc}); next cycle will reload")
+                        fp = None
+                self._last_fingerprint = fp
 
             # Dev-only: persist the fully warmed state so the next reload restores instantly.
             if self._cache_path:

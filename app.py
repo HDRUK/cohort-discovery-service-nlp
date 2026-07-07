@@ -81,7 +81,7 @@ OMOP_DB_CONFIG = {
 DEFAULT_THRESHOLD = int(os.getenv("DEFAULT_THRESHOLD", 90))
 
 
-def _build_engine(cfg: dict):
+def _build_engine(cfg: dict, pool_size: int = 5, max_overflow: int = 10):
     url = EngineURL.create(
         drivername="mysql+mysqlconnector",
         username=cfg["user"],
@@ -90,7 +90,29 @@ def _build_engine(cfg: dict):
         port=cfg["port"],
         database=cfg["database"],
     )
-    return create_engine(url, pool_size=5, max_overflow=10, pool_pre_ping=True)
+    return create_engine(
+        url, pool_size=pool_size, max_overflow=max_overflow, pool_pre_ping=True
+    )
+
+
+def _scalar(raw_conn, sql: str):
+    """Run a single scalar/row query on a raw connection and return the fetched row."""
+    cur = raw_conn.cursor()
+    try:
+        cur.execute(sql)
+        return cur.fetchone()
+    finally:
+        cur.close()
+
+
+def _best_effort_scalar(raw_conn, sql: str):
+    """Like _scalar but returns None instead of raising — used for the optional OMOP
+    tables in the fingerprint probe so a missing/absent table contributes a stable
+    None rather than wedging the whole probe (which would force a reload every cycle)."""
+    try:
+        return _scalar(raw_conn, sql)
+    except Exception:
+        return None
 
 
 @asynccontextmanager
@@ -98,12 +120,42 @@ async def lifespan(app: FastAPI):
     db_engine = _build_engine(DB_CONFIG)
     app.state.db_engine = db_engine
 
+    # Dedicated small engine for background refresh work (concept load + fingerprint
+    # probe) so the refresh never borrows a connection from the live-request pool.
+    refresh_engine = _build_engine(DB_CONFIG, pool_size=1, max_overflow=1)
+    app.state.refresh_engine = refresh_engine
+
+    def fingerprint():
+        """Cheap change-detection probe: skip the reload when the source data is unchanged.
+
+        COUNT+MAX on latest_distributions (the table regenerated when distributions
+        change) is the primary signal and is authoritative — if it errors the whole
+        probe raises and the store falls back to a full reload. The OMOP tables (which
+        may live in a different database on the same server, hence the qualified names)
+        are best-effort: absent/erroring counts contribute a stable None.
+        Blind spot: an in-place edit preserving row count and MAX(concept_id) is not
+        detected — acceptable for wholesale-regenerated distributions + static OMOP vocab.
+        """
+        omop_db = OMOP_DB_CONFIG["database"]
+        raw = refresh_engine.raw_connection()
+        try:
+            dist = _scalar(raw, "SELECT COUNT(*), MAX(concept_id) FROM latest_distributions")
+            syn = _best_effort_scalar(raw, f"SELECT COUNT(*) FROM `{omop_db}`.concept_synonym")
+            anc = _best_effort_scalar(
+                raw,
+                f"SELECT COUNT(*) FROM `{omop_db}`.concept_ancestor"
+                " WHERE min_levels_of_separation = 1",
+            )
+            return (tuple(dist) if dist else None, syn, anc)
+        finally:
+            raw.close()
+
     def enrich_resolver(store, concepts):
-        # The six derived lookups are largely independent; only synonym_token_index
-        # depends on synonym_map (so they share one task). Running them concurrently
-        # overlaps the two I/O-bound DB queries (synonym + ancestor) with each other
-        # and with the CPU builds — the GIL still serialises the CPU work, but the DB
-        # socket waits release it, which is where most of the warm-up time goes.
+        # The CPU-only builds (acronym / name-token / concepts_by_id) never touch MySQL,
+        # so they run concurrently in the pool. The two DB queries (synonym, ancestor) are
+        # run SEQUENTIALLY on this thread — deliberately not overlapped — so at most one
+        # heavy query hits MySQL at a time. This protects live-request latency during a
+        # genuine reload (concurrent DB loads previously saturated the server).
         concept_ids = [c["concept_id"] for c in concepts]
 
         def _timed(name, fn):
@@ -117,8 +169,7 @@ async def lifespan(app: FastAPI):
             return m, build_synonym_token_index(m)
 
         p0 = time.monotonic()
-        with ThreadPoolExecutor(max_workers=5, thread_name_prefix="warmup") as ex:
-            f_syn = ex.submit(_timed, "synonym_map+token_index", _load_synonyms)
+        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="warmup") as ex:
             f_acr = ex.submit(
                 _timed,
                 "build_acronym_index",
@@ -129,22 +180,25 @@ async def lifespan(app: FastAPI):
                 "build_name_token_index",
                 lambda: build_name_token_index(concepts),
             )
-            f_anc = ex.submit(
-                _timed,
-                "load_ancestor_map",
-                lambda: load_ancestor_map(OMOP_DB_CONFIG, concept_ids),
-            )
             f_cbi = ex.submit(
                 _timed, "build_concepts_by_id", lambda: build_concepts_by_id(concepts)
             )
 
-            store.synonym_map, store.synonym_token_index = f_syn.result()
+            # DB-bound loads: sequential, one MySQL query in flight at a time.
+            store.synonym_map, store.synonym_token_index = _timed(
+                "synonym_map+token_index", _load_synonyms
+            )
+            store.ancestor_map = _timed(
+                "load_ancestor_map",
+                lambda: load_ancestor_map(OMOP_DB_CONFIG, concept_ids),
+            )
+
             store.acronym_index = f_acr.result()
             store.name_token_index = f_name.result()
-            store.ancestor_map = f_anc.result()
             store.concepts_by_id = f_cbi.result()
         log.info(
-            f"[warmup] postprocess: all lookups built in {time.monotonic() - p0:.2f}s (concurrent)"
+            f"[warmup] postprocess: all lookups built in {time.monotonic() - p0:.2f}s"
+            " (DB loads serialised)"
         )
 
         total_bytes = sum(
@@ -175,10 +229,11 @@ async def lifespan(app: FastAPI):
         else None
     )
     store = ResolverStore(
-        lambda: load_concepts_from_mysql(db_engine),
+        lambda: load_concepts_from_mysql(refresh_engine),
         ttl_seconds=STORE_REFRESH_TTL,
         postprocess=enrich_resolver,
         cache_path=cache_path,
+        fingerprint=fingerprint,
     )
     app.state.resolver_store = store
 
@@ -208,6 +263,7 @@ async def lifespan(app: FastAPI):
     finally:
         if refresh_task:
             refresh_task.cancel()
+        refresh_engine.dispose()
 
 
 def get_resolver_store(request: Request) -> ResolverStore:

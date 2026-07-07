@@ -41,17 +41,32 @@ def test_row_accumulation_and_dedup():
     assert result == {1: [2, 3], 4: [5]}
 
 
-def test_bindings_bound_on_both_sides_and_excludes_self():
+def test_bindings_single_sided_parent_and_excludes_self():
     conn, cursor = _mock_conn(rows=[])
     with patch("mysql.connector.connect", return_value=conn):
         load_ancestor_map(DB_CONFIG, [10, 20])
 
     # The second execute is the SELECT (the first is the SHOW TABLES probe).
     sql, bindings = cursor.execute.call_args_list[-1][0]
-    assert sql.count("IN (") == 2
+    # Only the parent side is bound in SQL now; the child side is filtered in Python.
+    assert sql.count("IN (") == 1
+    assert "ancestor_concept_id IN (" in sql
+    assert "descendant_concept_id IN (" not in sql
     assert "ancestor_concept_id != descendant_concept_id" in sql
     assert "min_levels_of_separation = 1" in sql
-    assert bindings == [10, 20, 10, 20]
+    assert bindings == [10, 20]
+
+
+def test_descendant_not_in_concept_set_is_filtered_out():
+    # Parent 1 has children 2 (in set) and 99 (NOT in set); 99 must be dropped in Python.
+    rows = [
+        {"ancestor_concept_id": 1, "descendant_concept_id": 2},
+        {"ancestor_concept_id": 1, "descendant_concept_id": 99},
+    ]
+    conn, _ = _mock_conn(rows=rows)
+    with patch("mysql.connector.connect", return_value=conn):
+        result = load_ancestor_map(DB_CONFIG, [1, 2])
+    assert result == {1: [2]}
 
 
 def test_exception_returns_empty():
