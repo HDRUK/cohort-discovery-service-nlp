@@ -9,7 +9,7 @@ from resolvers.medcat_client import MedCATClient
 client = TestClient(app)
 
 
-def _make_row(concept_id, name, category, match_score, ncollections, count, cnt=None, children=None, collection_score=0):
+def _make_row(concept_id, name, category, match_score, ncollections, count, cnt=None, children=None, collection_score=0, ncollections_all=None, count_all=None):
     return {
         "concept_id": concept_id,
         "name": name,
@@ -17,7 +17,9 @@ def _make_row(concept_id, name, category, match_score, ncollections, count, cnt=
         "match_score": match_score,
         "collection_score": collection_score,
         "ncollections": ncollections,
+        "ncollections_all": ncollections_all if ncollections_all is not None else ncollections,
         "count": Decimal(str(count)) if count is not None else None,
+        "count_all": Decimal(str(count_all)) if count_all is not None else (Decimal(str(count)) if count is not None else None),
         "cnt": cnt if cnt is not None else 1,
         "children": children,
     }
@@ -176,7 +178,7 @@ def test_include_ancestors_false_skips_children_join():
 def test_include_ancestors_true_attaches_children():
     rows = [_make_row(320128, "Essential hypertension", "Condition", 1000, 1, 50, cnt=1)]
     mock_engine, _ = _mock_engine(rows)
-    store = app.state.resolver_store
+    store = app.state.sql_resolver._store
     with patch.object(app.state.sql_resolver, "_engine", mock_engine), patch.object(
         store, "ancestor_map", {320128: [99]}
     ), patch.object(
@@ -198,7 +200,7 @@ def test_include_ancestors_true_attaches_children():
 def test_include_ancestors_true_drops_ids_absent_from_concepts_by_id():
     rows = [_make_row(320128, "Essential hypertension", "Condition", 1000, 1, 50, cnt=1)]
     mock_engine, _ = _mock_engine(rows)
-    store = app.state.resolver_store
+    store = app.state.sql_resolver._store
     with patch.object(app.state.sql_resolver, "_engine", mock_engine), patch.object(
         store, "ancestor_map", {320128: [99, 12345]}
     ), patch.object(
@@ -219,7 +221,7 @@ def test_include_ancestors_true_drops_ids_absent_from_concepts_by_id():
 def test_include_ancestors_true_reduced_mode_returns_empty_children():
     rows = [_make_row(320128, "Essential hypertension", "Condition", 1000, 1, 50, cnt=1)]
     mock_engine, _ = _mock_engine(rows)
-    store = app.state.resolver_store
+    store = app.state.sql_resolver._store
     with patch.object(app.state.sql_resolver, "_engine", mock_engine), patch.object(
         store, "ancestor_map", {}
     ), patch.object(store, "concepts_by_id", {}):
@@ -236,7 +238,7 @@ def test_include_ancestors_true_reduced_mode_returns_empty_children():
 def test_include_ancestors_true_sql_has_no_join_or_aggregate():
     rows = [_make_row(320128, "Essential hypertension", "Condition", 1000, 1, 50, cnt=1)]
     mock_engine, raw_conn = _mock_engine(rows)
-    store = app.state.resolver_store
+    store = app.state.sql_resolver._store
     with patch.object(app.state.sql_resolver, "_engine", mock_engine), patch.object(
         store, "ancestor_map", {}
     ), patch.object(store, "concepts_by_id", {}):

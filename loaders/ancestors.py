@@ -21,8 +21,9 @@ def load_ancestor_map(db_config: Dict[str, Any], concept_ids: List[int]) -> Dict
     if not concept_ids:
         return {}
     t0 = time.monotonic()
-    conn = mysql.connector.connect(**db_config)
+    conn = None
     try:
+        conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
         cursor.execute("SHOW TABLES LIKE 'concept_ancestors'")
         exists = cursor.fetchone()
@@ -58,4 +59,5 @@ def load_ancestor_map(db_config: Dict[str, Any], concept_ids: List[int]) -> Dict
         log.warning(f"[Start-up] Failed to load ancestor map: {e}")
         return {}
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()

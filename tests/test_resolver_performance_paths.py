@@ -133,6 +133,29 @@ def test_fast_path_no_match_skips_query():
     cursor.execute.assert_not_called()
 
 
+def test_include_ancestors_hydrates_children_from_map():
+    concepts = [
+        {"concept_id": 24006, "concept_name": "Sickle cell-hemoglobin C disease", "domain_id": "Condition"},
+        {"concept_id": 24007, "concept_name": "Sickle cell-thalassemia disease", "domain_id": "Condition"},
+    ]
+    row = {"concept_id": 24006, "name": "Sickle cell-hemoglobin C disease",
+           "category": "Condition", "match_score": 500, "collection_score": 0,
+           "ncollections": 1, "count": 10, "cnt": 1}
+    cnt_cursor = MagicMock()
+    cnt_cursor.fetchone.return_value = {"cnt": 1}
+    cnt_cursor.fetchall.return_value = [row]
+    raw_conn = MagicMock()
+    raw_conn.cursor.return_value = cnt_cursor
+    engine = MagicMock()
+    engine.raw_connection.return_value = raw_conn
+
+    resolver = MySQLConceptResolver(engine, _Store(concepts, ancestor_map={24006: [24007]}))
+    result = resolver.search(concept_names=["sickle"], include_ancestors=True)
+
+    children = result["data"][0]["children"]
+    assert children == [{"concept_id": 24007, "name": "Sickle cell-thalassemia disease", "category": "Condition"}]
+
+
 # --------------------------------------------------------------------------
 # collection_stats CTE bounded to candidate ids (cold-scan optimisation)
 # --------------------------------------------------------------------------
@@ -177,7 +200,7 @@ def test_collection_score_is_quantised_and_bounded():
     # Population branch (no collection_ids): bucketed CASE on ncollections + count, no SQRT.
     population = build_collection_score_cte().score_expr
     assert "WHEN COUNT(DISTINCT d.collection_id) >= 11 THEN 40" in population
-    assert "WHEN SUM(d.count) >= 1000000 THEN 40" in population
+    assert "WHEN SUM(d.count) >= 1000000 THEN 70" in population
     assert "SQRT" not in population
 
     # Targeted branch (collection_ids given): bucketed on target collections, no SQRT,

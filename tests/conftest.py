@@ -7,6 +7,8 @@ from resolvers import MySQLConceptResolver
 class _MinimalStore:
     synonym_map = {}
     acronym_index = {}
+    ancestor_map = {}
+    concepts_by_id = {}
     resolver = None
 
     async def get_resolver(self):

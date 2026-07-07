@@ -69,24 +69,40 @@ async def lifespan(app: FastAPI):
 
     def enrich_resolver(store, concepts):
         s0 = time.monotonic()
-        store.synonym_map = load_synonym_map(OMOP_DB_CONFIG, [c["concept_id"] for c in concepts])
+        store.synonym_map = load_synonym_map(
+            OMOP_DB_CONFIG, [c["concept_id"] for c in concepts]
+        )
         s1 = time.monotonic()
-        log.info(f"[warmup] postprocess.load_synonym_map: {s1 - s0:.2f}s ({len(store.synonym_map)} concepts)")
+        log.info(
+            f"[warmup] postprocess.load_synonym_map: {s1 - s0:.2f}s ({len(store.synonym_map)} concepts)"
+        )
         store.synonym_token_index = build_synonym_token_index(store.synonym_map)
         s2 = time.monotonic()
-        log.info(f"[warmup] postprocess.build_synonym_token_index: {s2 - s1:.2f}s ({len(store.synonym_token_index)} tokens)")
+        log.info(
+            f"[warmup] postprocess.build_synonym_token_index: {s2 - s1:.2f}s ({len(store.synonym_token_index)} tokens)"
+        )
         store.acronym_index = ENGINE.build_acronym_index(concepts)
         s3 = time.monotonic()
-        log.info(f"[warmup] postprocess.build_acronym_index: {s3 - s2:.2f}s ({len(store.acronym_index)} acronyms)")
+        log.info(
+            f"[warmup] postprocess.build_acronym_index: {s3 - s2:.2f}s ({len(store.acronym_index)} acronyms)"
+        )
         store.name_token_index = build_name_token_index(concepts)
         s4 = time.monotonic()
-        log.info(f"[warmup] postprocess.build_name_token_index: {s4 - s3:.2f}s ({len(store.name_token_index)} tokens)")
-        store.ancestor_map = load_ancestor_map(OMOP_DB_CONFIG, [c["concept_id"] for c in concepts])
+        log.info(
+            f"[warmup] postprocess.build_name_token_index: {s4 - s3:.2f}s ({len(store.name_token_index)} tokens)"
+        )
+        store.ancestor_map = load_ancestor_map(
+            OMOP_DB_CONFIG, [c["concept_id"] for c in concepts]
+        )
         s5 = time.monotonic()
-        log.info(f"[warmup] postprocess.load_ancestor_map: {s5 - s4:.2f}s ({len(store.ancestor_map)} parents)")
+        log.info(
+            f"[warmup] postprocess.load_ancestor_map: {s5 - s4:.2f}s ({len(store.ancestor_map)} parents)"
+        )
         store.concepts_by_id = build_concepts_by_id(concepts)
         s6 = time.monotonic()
-        log.info(f"[warmup] postprocess.build_concepts_by_id: {s6 - s5:.2f}s ({len(store.concepts_by_id)} concepts)")
+        log.info(
+            f"[warmup] postprocess.build_concepts_by_id: {s6 - s5:.2f}s ({len(store.concepts_by_id)} concepts)"
+        )
 
     # Concepts are loaded at startup for three reasons:
     #   1. FuzzyConceptResolver — iterates the full list on every resolve (RESOLVER_BACKEND=fuzzy).
@@ -151,7 +167,9 @@ app.include_router(concepts_router)
 async def log_request_time(request: Request, call_next):
     t0 = time.monotonic()
     response = await call_next(request)
-    log.info(f"[Request] {request.method} {request.url.path} {response.status_code} {(time.monotonic() - t0) * 1000:.1f}ms")
+    log.info(
+        f"[Request] {request.method} {request.url.path} {response.status_code} {(time.monotonic() - t0) * 1000:.1f}ms"
+    )
     return response
 
 
@@ -277,7 +295,9 @@ def extract_entities(
     entities = ret_value.get("entities", [])
     warnings = ret_value.get("warnings", [])
     entity_names = [e.get("text", "") for e in entities]
-    log.info(f"[/extract] query='{payload.query}' → {len(entities)} entities: {entity_names}")
+    log.info(
+        f"[/extract] query='{payload.query}' → {len(entities)} entities: {entity_names}"
+    )
     if warnings:
         log.warning(f"[/extract] {len(warnings)} warning(s): {warnings}")
 

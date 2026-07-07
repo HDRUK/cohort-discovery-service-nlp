@@ -41,7 +41,9 @@ class ConceptSearchResult(BaseModel):
     match_score: int
     collection_score: int
     ncollections: int
+    ncollections_all: int = 0
     count: Optional[int]
+    count_all: Optional[int] = None
     children: List[ChildConcept] = []
 
     @model_validator(mode="before")
@@ -55,12 +57,12 @@ class ConceptSearchResult(BaseModel):
             data["children"] = [c for c in json.loads(decoded) or [] if c is not None]
         return data
 
-    @field_validator("match_score", "collection_score", "ncollections", mode="before")
+    @field_validator("match_score", "collection_score", "ncollections", "ncollections_all", mode="before")
     @classmethod
     def _coerce_nullable_int(cls, v: Any) -> int:
         return int(v or 0)
 
-    @field_validator("count", mode="before")
+    @field_validator("count", "count_all", mode="before")
     @classmethod
     def _coerce_count(cls, v: Any) -> Optional[int]:
         return int(v) if v is not None else None

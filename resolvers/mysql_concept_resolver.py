@@ -68,7 +68,9 @@ class MySQLConceptResolver(BaseResolver):
             return {"total": 0, "data": []}
 
         where = self._where(domain, collection_ids, use_collection_filter, search)
-        score = build_match_score_sql(concept_names, medcat_names, concept_ids, syn_concept_ids)
+        score = build_match_score_sql(
+            concept_names, medcat_names, concept_ids, syn_concept_ids
+        )
         collection = (
             build_collection_score_cte(collection_ids, candidate_ids)
             if use_collection_score
@@ -90,7 +92,9 @@ class MySQLConceptResolver(BaseResolver):
             f" ancestors={include_ancestors}"
             f" collection_ids={collection_ids}"
         )
-        result = self._execute(count_sql, where.bindings, data_sql, data_bindings, log_context)
+        result = self._execute(
+            count_sql, where.bindings, data_sql, data_bindings, log_context
+        )
         if include_ancestors:
             self._attach_children(result["data"])
         return result
@@ -102,9 +106,7 @@ class MySQLConceptResolver(BaseResolver):
             return self._medcat_client.expand(concept_names)
         return []
 
-    def _synonym_ids(
-        self, terms: List[str], enabled: bool
-    ) -> Optional[List[int]]:
+    def _synonym_ids(self, terms: List[str], enabled: bool) -> Optional[List[int]]:
         if not enabled:
             return None
         syn_t0 = time.monotonic()
@@ -215,11 +217,19 @@ class MySQLConceptResolver(BaseResolver):
         use_collection_score: bool,
     ) -> Tuple[str, List[Any]]:
         offset = (page - 1) * per_page
+        is_targeted = bool(collection.cte.sql)
+        ncollections_expr = (
+            "COALESCE(cs.target_ncollections, 0)" if is_targeted else "COUNT(DISTINCT d.collection_id)"
+        )
+        count_expr = "COALESCE(cs.target_count, 0)" if is_targeted else "SUM(d.count)"
         with_clause = f"WITH {collection.cte.sql}" if collection.cte.sql else "WITH"
         order_score = (
             "(base.match_score + base.collection_score)"
             if use_collection_score
             else "base.match_score"
+        )
+        group_by = ", ".join(
+            ["d.concept_id", "d.concept_name", "d.domain_id", *collection.group_cols]
         )
 
         data_sql = f"""
@@ -230,12 +240,14 @@ class MySQLConceptResolver(BaseResolver):
                     d.domain_id as category,
                     {score.sql} AS match_score,
                     {collection.score_expr} AS collection_score,
-                    COUNT(DISTINCT d.collection_id) AS ncollections,
-                    SUM(d.count) AS count
+                    {ncollections_expr} AS ncollections,
+                    COUNT(DISTINCT d.collection_id) AS ncollections_all,
+                    {count_expr} AS count,
+                    SUM(d.count) AS count_all
                 FROM latest_distributions d
                 {collection.join}
                 {where.sql}
-                GROUP BY d.concept_id, d.concept_name, d.domain_id{collection.group_cols}
+                GROUP BY {group_by}
             )
             SELECT base.*
             FROM base

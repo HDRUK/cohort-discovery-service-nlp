@@ -7,6 +7,12 @@ from logging_config import get_logger
 
 log = get_logger()
 
+# Precompiled tokenisation patterns.
+_NON_ALNUM = re.compile(
+    r"[^a-zA-Z0-9]+"
+)  # split concept names into alphanumeric tokens
+_NON_ALPHA = re.compile(r"[^a-zA-Z]")  # medcat token extraction (letters only)
+
 
 class SqlFragment(NamedTuple):
     """A piece of SQL text paired with the bindings it consumes.
@@ -21,18 +27,17 @@ class SqlFragment(NamedTuple):
 
 
 class CollectionScore(NamedTuple):
-    """Result of build_collection_score_cte(): a collection_stats CTE fragment plus
-    the SQL that folds its columns into the outer query's score/join/group-by."""
+    """Collection-aware scoring fragments folded into the outer query."""
 
-    cte: SqlFragment  # "collection_stats AS (...)," ; empty fragment when no collections
+    cte: SqlFragment  # "collection_stats AS (...)," — empty when no target collections
     score_expr: str
     join: str
-    group_cols: str
+    group_cols: List[str]  # extra GROUP BY columns the score_expr / join require
 
     @classmethod
     def empty(cls) -> "CollectionScore":
         """The no-collection-score case (score expression is a literal 0)."""
-        return cls(SqlFragment("", []), "0", "", "")
+        return cls(SqlFragment("", []), "0", "", [])
 
 
 CONCEPT_MATCH_SCORE_EXACT = int(os.getenv("CONCEPT_MATCH_SCORE_EXACT", 10000))
@@ -53,8 +58,15 @@ _MEDCAT_TOKEN_MIN_LEN: int = _medcat_rules.get("token_min_len", 8)
 # branch additionally applies a strong penalty to concepts in none of the selected
 # collections (see _TARGET_MISS_PENALTY).
 _NCOLLECTIONS_TIERS = [(11, 40), (6, 30), (2, 20), (1, 10)]  # ">10",">5",">=2","=1"
-_COUNT_TIERS = [(1_000_000, 40), (100_000, 30), (1_000, 20), (100, 10)]
-_TARGET_FLAG_POINTS = 20  # in_target / has_target_count flags
+_COUNT_TIERS = [
+    (1_000_000, 70),
+    (100_000, 60),
+    (50_000, 50),
+    (10_000, 40),
+    (5_000, 33),
+    (1_000, 20),
+    (100, 10),
+]
 # In targeted mode, a concept in NONE of the selected collections is strongly demoted:
 # this exceeds a full match tier, so in-collection matches are preferred even over better
 # text matches that are out of collection.
@@ -67,21 +79,6 @@ def _bucketed(col: str, tiers) -> str:
     return f"CASE {whens} ELSE 0 END"
 
 
-# Collection score expressions (see build_collection_score_cte).
-# Targeted: reads the pre-aggregated collection_stats CTE columns (cs.*).
-_TARGET_COLLECTION_SCORE = (
-    f"CASE WHEN COALESCE(cs.in_target, 0) = 1 THEN {_TARGET_FLAG_POINTS}"
-    f" ELSE -{_TARGET_MISS_PENALTY} END"
-    + " + " + _bucketed("COALESCE(cs.target_ncollections, 0)", _NCOLLECTIONS_TIERS)
-    + f" + COALESCE(cs.has_target_count, 0) * {_TARGET_FLAG_POINTS}"
-)
-# Population: no target collections, score off the row's own aggregates.
-_POPULATION_COLLECTION_SCORE = (
-    _bucketed("COUNT(DISTINCT d.collection_id)", _NCOLLECTIONS_TIERS)
-    + " + " + _bucketed("SUM(d.count)", _COUNT_TIERS)
-)
-
-
 def _placeholders(values) -> str:
     """', '-joined `%s` placeholders, one per element of a bindable sequence."""
     return ", ".join(["%s"] * len(values))
@@ -91,7 +88,7 @@ def _extract_medcat_tokens(terms: List[str]) -> List[str]:
     seen: set = set()
     tokens = []
     for term in terms:
-        for word in re.sub(r"[^a-zA-Z]", " ", term).lower().split():
+        for word in _NON_ALPHA.sub(" ", term).lower().split():
             if (
                 len(word) >= _MEDCAT_TOKEN_MIN_LEN
                 and word not in _MEDCAT_TOKEN_STOPWORDS
@@ -123,7 +120,7 @@ def find_synonym_concept_ids(
 
 
 def _normalise_for_like(term: str, strip_s: bool = False) -> str:
-    normalised = re.sub(r"[^a-zA-Z0-9]+", "%", term)
+    normalised = _NON_ALNUM.sub("%", term)
     if strip_s and normalised.endswith("s"):
         normalised = normalised[:-1]
     return normalised
@@ -137,9 +134,7 @@ def build_name_token_index(concepts: List[Dict[str, Any]]) -> Dict[str, set]:
     """
     index: Dict[str, set] = {}
     for concept in concepts:
-        name = re.sub(
-            r"[^a-zA-Z0-9]+", " ", (concept.get("concept_name") or "").lower()
-        )
+        name = _NON_ALNUM.sub(" ", (concept.get("concept_name") or "").lower())
         cid = concept["concept_id"]
         for token in name.split():
             if len(token) >= 2:
@@ -179,11 +174,7 @@ def find_name_match_concept_ids(
         term = term.strip()
         if not term:
             continue
-        tokens = [
-            t
-            for t in re.sub(r"[^a-zA-Z0-9]+", " ", term.lower()).split()
-            if len(t) >= 2
-        ]
+        tokens = [t for t in _NON_ALNUM.sub(" ", term.lower()).split() if len(t) >= 2]
         if not tokens:
             continue
         # Intersect starting from the rarest (smallest) token set
@@ -314,23 +305,18 @@ def build_collection_score_cte(
     collection_ids: Optional[List[int]] = None,
     candidate_ids: Optional[List[int]] = None,
 ) -> CollectionScore:
-    """Returns a CollectionScore (cte fragment, score_expr, join, group_cols).
+    """Build the collection-aware scoring fragments.
 
-    When collection_ids are provided, pre-aggregates collection membership into a CTE
-    (one targeted scan) and expresses the score as a simple column reference — avoiding
-    four separate CASE WHEN collection_id IN (...) aggregates across every candidate row.
-
-    When `candidate_ids` are provided (the in-memory pre-filter fired), the CTE is bounded
-    to those concept_ids too. Otherwise it aggregates every concept in the target
-    collections even though only the candidates survive the outer WHERE — a large cold-cache
-    scan for nothing. This is the same id set already applied to `base`, so results are
-    identical; it just avoids reading the whole collection off disk on a cold buffer pool.
-
-    When no collection_ids, returns a population-level score using SQRT aggregates
-    (no CTE needed).
+    With `collection_ids`: pre-aggregate membership into a `collection_stats` CTE
+    (bounded to `candidate_ids` when the pre-filter fired) and score off its columns.
+    Without: score off the row's own population aggregates, no CTE needed.
     """
     if not collection_ids:
-        return CollectionScore(SqlFragment("", []), _POPULATION_COLLECTION_SCORE, "", "")
+        population_score = f"""
+            {_bucketed("COUNT(DISTINCT d.collection_id)", _NCOLLECTIONS_TIERS)}
+            + {_bucketed("SUM(d.count)", _COUNT_TIERS)}
+        """
+        return CollectionScore(SqlFragment("", []), population_score, "", [])
 
     bindings = list(collection_ids)
     candidate_clause = ""
@@ -340,15 +326,19 @@ def build_collection_score_cte(
 
     cte_sql = f"""collection_stats AS (
             SELECT concept_id,
-                1 AS in_target,
                 COUNT(DISTINCT collection_id) AS target_ncollections,
-                IF(SUM(`count`) > 0, 1, 0) AS has_target_count
+                SUM(count) AS target_count
             FROM latest_distributions
             WHERE collection_id IN ({_placeholders(collection_ids)}){candidate_clause}
             GROUP BY concept_id
         ),"""
+    ncollections_whens = " ".join(
+        f"WHEN COALESCE(cs.target_ncollections, 0) >= {t} THEN {p}"
+        for t, p in _NCOLLECTIONS_TIERS
+    )
+    target_score = f"CASE {ncollections_whens} ELSE -{_TARGET_MISS_PENALTY} END"
     join_sql = "LEFT JOIN collection_stats cs ON cs.concept_id = d.concept_id"
-    group_cols = ", cs.in_target, cs.target_ncollections, cs.has_target_count"
+    group_cols = ["cs.target_ncollections", "cs.target_count"]
     return CollectionScore(
-        SqlFragment(cte_sql, bindings), _TARGET_COLLECTION_SCORE, join_sql, group_cols
+        SqlFragment(cte_sql, bindings), target_score, join_sql, group_cols
     )
