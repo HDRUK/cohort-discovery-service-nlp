@@ -3,6 +3,10 @@ import time
 
 from sqlalchemy.engine import Engine
 
+from logging_config import get_logger
+
+log = get_logger("loaders.concepts")
+
 
 def load_concepts_from_mysql(engine: Engine) -> list[dict]:
     start_time = time.time()
@@ -12,7 +16,7 @@ def load_concepts_from_mysql(engine: Engine) -> list[dict]:
         cursor = raw_conn.cursor(dictionary=True)
         db_start = time.time()
         cursor.execute(
-            "SELECT DISTINCT concept_id,concept_name FROM latest_distributions"
+            "SELECT DISTINCT concept_id,concept_name,domain_id FROM latest_distributions"
         )
         concepts = cursor.fetchall()
         db_time = time.time() - db_start
@@ -22,10 +26,9 @@ def load_concepts_from_mysql(engine: Engine) -> list[dict]:
     total_time = time.time() - start_time
     concepts_size = sys.getsizeof(concepts)
 
-    print("\n[Profiling] load_concepts_from_mysql")
-    print(f"  - DB time (query + fetch): {db_time:.2f}s")
-    print(f"  - Total time: {total_time:.2f}s")
-    print(f"  - Concepts loaded: {len(concepts)}")
-    print(f"  - Estimated memory: {concepts_size / 1024 / 1024:.2f}MB\n")
+    log.info(
+        f"[warmup] load_concepts_from_mysql: DB {db_time:.2f}s, total {total_time:.2f}s, "
+        f"{len(concepts)} concepts, ~{concepts_size / 1024 / 1024:.2f}MB"
+    )
 
     return concepts

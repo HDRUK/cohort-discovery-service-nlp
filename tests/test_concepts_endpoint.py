@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from app import app
+from resolvers.medcat_client import MedCATClient
 
 client = TestClient(app)
 
@@ -25,6 +26,8 @@ def _make_row(concept_id, name, category, match_score, ncollections, count, cnt=
 def _mock_engine(rows):
     cursor = MagicMock()
     cursor.fetchall.return_value = rows
+    cnt = rows[0]["cnt"] if rows else 0
+    cursor.fetchone.return_value = {"cnt": cnt}
     raw_conn = MagicMock()
     raw_conn.cursor.return_value = cursor
     mock_engine = MagicMock()
@@ -171,21 +174,15 @@ def test_include_ancestors_false_skips_children_join():
 
 
 def test_include_ancestors_true_attaches_children():
-    rows = [
-        {
-            "concept_id": 320128,
-            "name": "Essential hypertension",
-            "category": "Condition",
-            "match_score": 1000,
-            "collection_score": 0,
-            "ncollections": 1,
-            "count": Decimal("50"),
-            "cnt": 1,
-            "children": '[{"concept_id": 99, "name": "Child concept", "category": "Condition"}]',
-        }
-    ]
+    rows = [_make_row(320128, "Essential hypertension", "Condition", 1000, 1, 50, cnt=1)]
     mock_engine, _ = _mock_engine(rows)
-    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
+    store = app.state.resolver_store
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine), patch.object(
+        store, "ancestor_map", {320128: [99]}
+    ), patch.object(
+        store, "concepts_by_id",
+        {99: {"concept_id": 99, "name": "Child concept", "category": "Condition"}},
+    ):
         response = client.post(
             "/concepts/search",
             json={"concept_id": [320128], "include_ancestors": True},
@@ -195,24 +192,19 @@ def test_include_ancestors_true_attaches_children():
     body = response.json()
     assert len(body["data"][0]["children"]) == 1
     assert body["data"][0]["children"][0]["concept_id"] == 99
+    assert body["data"][0]["children"][0]["name"] == "Child concept"
 
 
-def test_children_null_entries_are_filtered():
-    rows = [
-        {
-            "concept_id": 320128,
-            "name": "Essential hypertension",
-            "category": "Condition",
-            "match_score": 1000,
-            "collection_score": 0,
-            "ncollections": 1,
-            "count": Decimal("50"),
-            "cnt": 1,
-            "children": '[{"concept_id": 99, "name": "Child", "category": "Condition"}, null]',
-        }
-    ]
+def test_include_ancestors_true_drops_ids_absent_from_concepts_by_id():
+    rows = [_make_row(320128, "Essential hypertension", "Condition", 1000, 1, 50, cnt=1)]
     mock_engine, _ = _mock_engine(rows)
-    with patch.object(app.state.sql_resolver, "_engine", mock_engine):
+    store = app.state.resolver_store
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine), patch.object(
+        store, "ancestor_map", {320128: [99, 12345]}
+    ), patch.object(
+        store, "concepts_by_id",
+        {99: {"concept_id": 99, "name": "Child concept", "category": "Condition"}},
+    ):
         response = client.post(
             "/concepts/search",
             json={"concept_id": [320128], "include_ancestors": True},
@@ -220,7 +212,83 @@ def test_children_null_entries_are_filtered():
 
     assert response.status_code == 200
     body = response.json()
-    assert len(body["data"][0]["children"]) == 1
+    # 12345 has no concepts_by_id entry, so it is silently dropped.
+    assert [c["concept_id"] for c in body["data"][0]["children"]] == [99]
+
+
+def test_include_ancestors_true_reduced_mode_returns_empty_children():
+    rows = [_make_row(320128, "Essential hypertension", "Condition", 1000, 1, 50, cnt=1)]
+    mock_engine, _ = _mock_engine(rows)
+    store = app.state.resolver_store
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine), patch.object(
+        store, "ancestor_map", {}
+    ), patch.object(store, "concepts_by_id", {}):
+        response = client.post(
+            "/concepts/search",
+            json={"concept_id": [320128], "include_ancestors": True},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"][0]["children"] == []
+
+
+def test_include_ancestors_true_sql_has_no_join_or_aggregate():
+    rows = [_make_row(320128, "Essential hypertension", "Condition", 1000, 1, 50, cnt=1)]
+    mock_engine, raw_conn = _mock_engine(rows)
+    store = app.state.resolver_store
+    with patch.object(app.state.sql_resolver, "_engine", mock_engine), patch.object(
+        store, "ancestor_map", {}
+    ), patch.object(store, "concepts_by_id", {}):
+        response = client.post(
+            "/concepts/search",
+            json={"concept_id": [320128], "include_ancestors": True},
+        )
+
+    assert response.status_code == 200
+    sql, _bindings = raw_conn.cursor.return_value.execute.call_args[0]
+    assert "concept_ancestors" not in sql
+    assert "JSON_ARRAYAGG" not in sql
+    # Only the inner `base` CTE groups; no outer GROUP BY was needed for children.
+    assert sql.count("GROUP BY") == 1
+
+
+def test_parse_children_accepts_json_string_and_filters_nulls():
+    from concepts import ConceptSearchResult
+
+    result = ConceptSearchResult.model_validate(
+        {
+            "concept_id": 320128,
+            "name": "Essential hypertension",
+            "category": "Condition",
+            "match_score": 1000,
+            "collection_score": 0,
+            "ncollections": 1,
+            "count": 50,
+            "children": '[{"concept_id": 99, "name": "Child", "category": "Condition"}, null]',
+        }
+    )
+    assert len(result.children) == 1
+    assert result.children[0].concept_id == 99
+
+
+def test_parse_children_passes_list_through():
+    from concepts import ConceptSearchResult
+
+    result = ConceptSearchResult.model_validate(
+        {
+            "concept_id": 320128,
+            "name": "Essential hypertension",
+            "category": "Condition",
+            "match_score": 1000,
+            "collection_score": 0,
+            "ncollections": 1,
+            "count": 50,
+            "children": [{"concept_id": 99, "name": "Child", "category": "Condition"}],
+        }
+    )
+    assert len(result.children) == 1
+    assert result.children[0].name == "Child"
 
 
 def test_separator_variants_match_via_normalisation():
@@ -272,14 +340,13 @@ def _medcat_response(pretty_name: str, acc: float = 0.8) -> MagicMock:
 
 
 def test_medcat_expansion_augments_search_terms(monkeypatch):
-    """When MEDCAT_URL is set, the pretty_name is added as an extra search term."""
-    monkeypatch.setenv("MEDCAT_URL", "http://medcat.example.com")
-    monkeypatch.setenv("MEDCAT_MIN_ACC", "0.5")
-
+    """When a MedCATClient is configured, the pretty_name is added as an extra search term."""
     mock_engine, raw_conn = _mock_engine([])
+    mock_client = MedCATClient("http://medcat.example.com", min_acc=0.5)
     with (
         patch.object(app.state.sql_resolver, "_engine", mock_engine),
-        patch("concepts.httpx.post", return_value=_medcat_response("Chronic Kidney Diseases")),
+        patch.object(app.state.sql_resolver, "_medcat_client", mock_client),
+        patch("resolvers.medcat_client.httpx.post", return_value=_medcat_response("Chronic Kidney Diseases")),
     ):
         response = client.post(
             "/concepts/search",
@@ -297,12 +364,12 @@ def test_medcat_expansion_augments_search_terms(monkeypatch):
 
 def test_medcat_unavailable_falls_back_to_original(monkeypatch):
     """When the MedCAT call raises, the original term is still searched."""
-    monkeypatch.setenv("MEDCAT_URL", "http://medcat.example.com")
-
     mock_engine, raw_conn = _mock_engine([])
+    mock_client = MedCATClient("http://medcat.example.com")
     with (
         patch.object(app.state.sql_resolver, "_engine", mock_engine),
-        patch("concepts.httpx.post", side_effect=ConnectionError("unreachable")),
+        patch.object(app.state.sql_resolver, "_medcat_client", mock_client),
+        patch("resolvers.medcat_client.httpx.post", side_effect=ConnectionError("unreachable")),
     ):
         response = client.post(
             "/concepts/search",
@@ -316,13 +383,12 @@ def test_medcat_unavailable_falls_back_to_original(monkeypatch):
 
 
 def test_medcat_url_not_set_does_not_crash(monkeypatch):
-    """When MEDCAT_URL is not configured the endpoint works without calling MedCAT."""
-    monkeypatch.delenv("MEDCAT_URL", raising=False)
-
+    """When no MedCATClient is configured the endpoint works without calling MedCAT."""
     mock_engine, raw_conn = _mock_engine([])
     with (
         patch.object(app.state.sql_resolver, "_engine", mock_engine),
-        patch("concepts.httpx.post", side_effect=Exception("should not be called")),
+        patch.object(app.state.sql_resolver, "_medcat_client", None),
+        patch("resolvers.medcat_client.httpx.post", side_effect=Exception("should not be called")),
     ):
         response = client.post(
             "/concepts/search",

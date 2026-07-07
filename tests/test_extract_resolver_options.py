@@ -4,20 +4,17 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app import app
-from resolvers import FallbackResolver
-from resolvers import FuzzyConceptResolver
 from resolvers import MySQLConceptResolver
 
 
 class LocalResolverStore:
-    def __init__(self, resolver):
-        self._resolver = resolver
+    def __init__(self):
         self.synonym_map = {}
         self.acronym_index = {}
-        self.resolver = resolver
+        self.resolver = None
 
     async def get_resolver(self):
-        return self._resolver
+        return self.resolver
 
 
 try:
@@ -25,18 +22,14 @@ try:
 except AttributeError:
     app.state.db_config = {}
 
-_store = LocalResolverStore(FuzzyConceptResolver([]))
+_store = LocalResolverStore()
 
 try:
     app.state.sql_resolver
 except AttributeError:
     app.state.sql_resolver = MySQLConceptResolver({}, _store)
 
-try:
-    app.state.fallback_resolver
-except AttributeError:
-    app.state.fallback_resolver = FallbackResolver(app.state.sql_resolver, _store)
-
+app.state.backend = "sql"
 app.state.resolver_store = _store
 
 client = TestClient(app)
@@ -126,3 +119,5 @@ def test_extract_returns_concepts_from_resolver():
     assert len(entities) == 1
     assert entities[0]["attributes"]["concept_id"] == 1
     assert entities[0]["attributes"]["concept_name"] == "Diabetes"
+
+

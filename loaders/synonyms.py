@@ -1,7 +1,30 @@
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, FrozenSet, List, Tuple
 
 import mysql.connector
+
+from logging_config import get_logger
+
+log = get_logger()
+
+
+def build_synonym_token_index(
+    synonym_map: Dict[int, List[str]],
+) -> Dict[str, List[Tuple[int, FrozenSet[str]]]]:
+    """Invert synonym_map into an index keyed by token for fast lookup.
+
+    Maps each token -> list of (concept_id, frozenset(synonym_tokens)). A query term
+    matches a concept only if all its tokens appear in one synonym, so any matching
+    synonym is present in the candidate list of *every* one of the term's tokens —
+    scanning the rarest token's list alone is both sufficient and complete.
+    """
+    index: Dict[str, List[Tuple[int, FrozenSet[str]]]] = {}
+    for concept_id, synonyms in synonym_map.items():
+        for syn in synonyms:
+            tokens = frozenset(syn.split())
+            for token in tokens:
+                index.setdefault(token, []).append((concept_id, tokens))
+    return index
 
 
 def load_synonym_map(db_config: Dict[str, Any], concept_ids: List[int]) -> Dict[int, List[str]]:
@@ -20,7 +43,7 @@ def load_synonym_map(db_config: Dict[str, Any], concept_ids: List[int]) -> Dict[
         exists = cursor.fetchone()
         cursor.close()
         if not exists:
-            print("[Start-up] concept_synonym table not found — synonym search disabled")
+            log.warning("[Start-up] concept_synonym table not found — synonym search disabled")
             return {}
         placeholders = ",".join(["%s"] * len(concept_ids))
         t1 = time.monotonic()
@@ -39,13 +62,13 @@ def load_synonym_map(db_config: Dict[str, Any], concept_ids: List[int]) -> Dict[
                 )
         total_syns = sum(len(v) for v in result.values())
         t3 = time.monotonic()
-        print(
+        log.info(
             f"[Store] Loaded {total_syns} synonyms for {len(result)} concepts"
             f" (query: {t2 - t1:.2f}s, build: {t3 - t2:.2f}s, total: {t3 - t0:.2f}s)"
         )
         return result
     except Exception as e:
-        print(f"[Start-up] Failed to load synonym map: {e}")
+        log.warning(f"[Start-up] Failed to load synonym map: {e}")
         return {}
     finally:
         conn.close()

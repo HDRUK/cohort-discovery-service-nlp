@@ -9,6 +9,7 @@ import rules_engine
 class LocalResolverStore:
     def __init__(self, resolver):
         self._resolver = resolver
+        self.resolver = resolver
 
     async def get_resolver(self):
         return self._resolver

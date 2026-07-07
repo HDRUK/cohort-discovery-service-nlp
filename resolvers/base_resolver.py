@@ -14,14 +14,27 @@ class BaseResolver(ABC):
     def synonym_map(self) -> Dict[int, List[str]]:
         return self._store.synonym_map if self._store else {}
 
+    @property
+    def synonym_token_index(self) -> Dict[str, List[Any]]:
+        return getattr(self._store, "synonym_token_index", {}) if self._store else {}
+
+    @property
+    def ancestor_map(self) -> Dict[int, List[int]]:
+        return getattr(self._store, "ancestor_map", {}) if self._store else {}
+
+    @property
+    def concepts_by_id(self) -> Dict[int, Dict[str, Any]]:
+        return getattr(self._store, "concepts_by_id", {}) if self._store else {}
+
     @abstractmethod
-    def resolve(
+    def search(
         self,
-        text: str,
-        threshold: Any,
         *,
+        concept_names: Optional[List[str]] = None,
+        threshold: Optional[float] = None,
         phrase_first: bool = True,
-        max_matches: Optional[int] = None,
+        per_page: int = 25,
         **kwargs,
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
+        """Run a concept search. Returns {"total": int, "data": [rows]}."""
         ...

@@ -1,7 +1,11 @@
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
+from logging_config import get_logger
 from rules_engine import RuleEngine
+
+log = get_logger()
 
 
 class QueryParser:
@@ -122,6 +126,35 @@ class QueryParser:
 
         return pattern.sub(replace, text)
 
+    def _normalise_for_search(
+        self, candidate: str, resolver: Any, warnings: List[str]
+    ) -> Tuple[str, str]:
+        """Normalise a raw candidate into the (clean, search) text used for resolution.
+
+        Mirrors the main-loop normalisation sequence exactly. Shared by the parallel
+        pre-fetch pass (called with a throwaway ``warnings`` list) and the main loop
+        (called with the real ``warnings`` list) so the two never drift.
+        """
+        _, candidate_without_age = self.engine.extract_age_constraints(
+            candidate, "entity"
+        )
+        _, candidate_without_time = self.engine.extract_time_constraints(
+            candidate_without_age, "entity"
+        )
+        candidate_without_time = self.engine.strip_demographic_age_prefix(
+            candidate_without_time
+        )
+        candidate_clean = self.engine.clean_candidates(candidate_without_time)
+        candidate_clean = self.engine.strip_dangling_logical_operators(candidate_clean)
+        candidate_clean = self.engine.strip_leading_verbs(candidate_clean)
+        candidate_clean = self.engine.strip_dangling_logical_operators(candidate_clean)
+        candidate_normalised = self.engine.apply_demographic_patterns(candidate_clean)
+        candidate_normalised = self.engine.apply_mappings(
+            candidate_normalised, "normalise", warnings
+        )
+        candidate_normalised = self._expand_acronyms(candidate_normalised, resolver)
+        return candidate_clean, candidate_normalised
+
     def extract(
         self,
         query: str,
@@ -147,7 +180,7 @@ class QueryParser:
                 all_time_constraints: List[Dict[str, Any]] = []
 
                 for segment in or_segments:
-                    seg_result = self.extract(segment, threshold, phrase_first, resolver, max_matches=max_matches)
+                    seg_result = self.extract(segment, threshold, phrase_first, resolver, max_matches=max_matches, **resolve_kwargs)
                     all_entities.extend(seg_result["entities"])
                     all_groups.extend(seg_result.get("groups", []))
                     all_warnings.extend(seg_result["warnings"])
@@ -198,7 +231,7 @@ class QueryParser:
                             "All operators within a group must be the same"
                         )
                     group_result = self.extract(
-                        inner_text, threshold, phrase_first, resolver, _skip_paren=True, max_matches=max_matches
+                        inner_text, threshold, phrase_first, resolver, _skip_paren=True, max_matches=max_matches, **resolve_kwargs
                     )
                     paren_groups.append(
                         {
@@ -342,35 +375,52 @@ class QueryParser:
                     entity_time_constraints_all, candidate_time_constraints
                 )
 
-        for candidate in candidates:
+        # Pre-fetch: resolve candidates concurrently so a multi-term query's wall-time
+        # approaches the slowest single candidate rather than the sum. Only the SQL is
+        # parallelised here; the main loop below still assembles results sequentially so
+        # warning order, dedup and entity ordering are byte-for-byte unchanged. The skip
+        # predicate mirrors the age-group-only skip in the main loop, so every candidate
+        # that reaches resolver.search() below has a precomputed result.
+        resolvable: List[Tuple[int, str]] = []
+        for idx, candidate in enumerate(candidates):
+            _, candidate_normalised = self._normalise_for_search(candidate, resolver, [])
+            if not self.engine.has_non_demographic_content(
+                candidate_normalised
+            ) and not self.engine.has_demographic_concept(candidate_normalised):
+                continue
+            resolvable.append((idx, candidate_normalised))
+
+        search_results: Dict[int, Dict[str, Any]] = {}
+        if resolvable:
+            def _run_search(item: Tuple[int, str]) -> Tuple[int, Dict[str, Any]]:
+                item_idx, normalised = item
+                return item_idx, resolver.search(
+                    concept_names=[normalised],
+                    threshold=threshold,
+                    phrase_first=phrase_first,
+                    per_page=max_matches,
+                    **resolve_kwargs,
+                )
+
+            with ThreadPoolExecutor(max_workers=min(len(resolvable), 5)) as executor:
+                for item_idx, res in executor.map(_run_search, resolvable):
+                    search_results[item_idx] = res
+
+        for idx, candidate in enumerate(candidates):
             candidate_age_constraints, candidate_without_age = (
                 self.engine.extract_age_constraints(candidate, "entity")
             )
-            candidate_time_constraints, candidate_without_time = (
-                self.engine.extract_time_constraints(candidate_without_age, "entity")
+            candidate_time_constraints, _ = self.engine.extract_time_constraints(
+                candidate_without_age, "entity"
             )
-            candidate_without_time = self.engine.strip_demographic_age_prefix(candidate_without_time)
-            candidate_clean = self.engine.clean_candidates(candidate_without_time)
-
-            candidate_clean = self.engine.strip_dangling_logical_operators(
-                candidate_clean
+            candidate_clean, candidate_normalised = self._normalise_for_search(
+                candidate, resolver, warnings
             )
-            candidate_clean = self.engine.strip_leading_verbs(candidate_clean)
-            candidate_clean = self.engine.strip_dangling_logical_operators(
-                candidate_clean
-            )
-            candidate_normalised = self.engine.apply_demographic_patterns(
-                candidate_clean
-            )
-            candidate_normalised = self.engine.apply_mappings(
-                candidate_normalised, "normalise", warnings
-            )
-            candidate_normalised = self._expand_acronyms(candidate_normalised, resolver)
 
             # Negation
             negated = self.engine.is_negated(candidate)
 
-            print(
+            log.debug(
                 f"Processing candidate: '{candidate}' (clean: '{candidate_clean}', normalised: '{candidate_normalised}'), negated={negated}"
             )
 
@@ -426,10 +476,9 @@ class QueryParser:
             ) and not self.engine.has_demographic_concept(candidate_normalised):
                 continue
 
-            # Resolve concepts
-            matches = resolver.resolve(
-                candidate_normalised, threshold, phrase_first=phrase_first, max_matches=max_matches, **resolve_kwargs
-            )
+            # Resolve concepts (search ran in the parallel pre-fetch pass above)
+            res = search_results[idx]
+            matches = res["data"]
             index = working_query.lower().find(candidate.lower())
 
             if not matches:
@@ -486,10 +535,17 @@ class QueryParser:
                 start_idx = index
                 end_idx = start_idx + len(candidate)
 
+                # Map the canonical search row to the /extract attribute shape.
+                attributes = {**match}
+                attributes["concept_name"] = match.get("concept_name") or match.get("name")
+                attributes["domain_id"] = match.get("domain_id") or match.get("category")
+                for k in ("name", "category", "cnt"):
+                    attributes.pop(k, None)
+
                 entities.append(
                     {
                         "text": candidate,
-                        "label": match.get("domain_id"),
+                        "label": attributes["domain_id"],
                         "start": start_idx,
                         "end": end_idx,
                         "negated": negated,
@@ -499,7 +555,7 @@ class QueryParser:
                         "time_constraints": entity_time_constraints
                         if entity_time_constraints is not None
                         else [],
-                        "attributes": match,
+                        "attributes": attributes,
                     }
                 )
 
