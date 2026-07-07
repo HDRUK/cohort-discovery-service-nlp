@@ -317,10 +317,10 @@ def build_collection_score_cte(
             {_bucketed("COUNT(DISTINCT d.collection_id)", _NCOLLECTIONS_TIERS)}
             + {_bucketed("SUM(d.count)", _COUNT_TIERS)}
         """
-        log.debug("---> not using collection_ids")
-        log.debug(population_score)
+        log.debug("---> not using collection_ids to score collections")
         return CollectionScore(SqlFragment("", []), population_score, "", [])
 
+    log.debug("---> using collection_ids to score collections")
     bindings = list(collection_ids)
     candidate_clause = ""
     if candidate_ids:
@@ -346,10 +346,6 @@ def build_collection_score_cte(
     )
     join_sql = "LEFT JOIN collection_stats cs ON cs.concept_id = d.concept_id"
     group_cols = ["cs.target_ncollections", "cs.target_count"]
-
-    log.debug("----> using collections score")
-    log.debug(target_score)
-    log.debug(ncollections_whens)
 
     return CollectionScore(
         SqlFragment(cte_sql, bindings), target_score, join_sql, group_cols
