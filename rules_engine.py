@@ -111,6 +111,7 @@ def load_rules() -> Dict[str, Any]:
             for name, entry in data.get("unsupported_patterns", {}).items()
         },
         "acronym_rules": acronym_rules,
+        "medcat": data.get("medcat", {}),
     }
 
 
@@ -132,6 +133,7 @@ class RuleEngine:
         self.unsupported_patterns = self.rules["unsupported_patterns"]
         self.acronym_rules = self.rules["acronym_rules"]
         self.logical_operators = self.rules["logical_operators"]
+        self.medcat = self.rules.get("medcat", {})
 
     def split_candidates(self, text: str) -> List[str]:
         pattern = "|".join(self.splitters)

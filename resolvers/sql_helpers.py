@@ -1,9 +1,9 @@
-import json
 import os
 import re
 from typing import Any, Dict, List, NamedTuple, Optional
 
 from logging_config import get_logger
+from rules_engine import DEFAULT_ENGINE
 
 log = get_logger()
 
@@ -45,10 +45,9 @@ CONCEPT_MATCH_SCORE_CONTAINS = int(os.getenv("CONCEPT_MATCH_SCORE_CONTAINS", 500
 CONCEPT_MATCH_SCORE_PREFIX = int(os.getenv("CONCEPT_MATCH_SCORE_PREFIX", 100))
 CONCEPT_MATCH_SCORE_SYNONYM = int(os.getenv("CONCEPT_MATCH_SCORE_SYNONYM", 1000))
 CONCEPT_MATCH_SCORE_TOKEN = int(os.getenv("CONCEPT_MATCH_SCORE_TOKEN", 50))
-_rules_path = os.getenv("RULES_PATH", "rules.json")
-with open(_rules_path) as _f:
-    _medcat_rules = json.load(_f).get("medcat", {})
-
+# medcat token config is owned by RuleEngine (single rules.json parse); read from the
+# shared default engine rather than re-opening the file here.
+_medcat_rules = DEFAULT_ENGINE.medcat
 _MEDCAT_TOKEN_STOPWORDS = set(_medcat_rules.get("token_stopwords", []))
 _MEDCAT_TOKEN_MIN_LEN: int = _medcat_rules.get("token_min_len", 8)
 
