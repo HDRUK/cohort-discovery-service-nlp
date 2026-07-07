@@ -23,6 +23,10 @@ def load_ancestor_map(db_config: Dict[str, Any], concept_ids: List[int]) -> Dict
     t0 = time.monotonic()
     conn = None
     try:
+        log.debug(
+            f"[Start-up] Loading concept_ancestors from db='{db_config.get('database')}'"
+            f" on host='{db_config.get('host')}'"
+        )
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
         cursor.execute("SHOW TABLES LIKE 'concept_ancestors'")

@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sys
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
@@ -22,6 +23,35 @@ from store import ResolverStore
 from logging_config import get_logger
 
 log = get_logger()
+
+
+def _deep_sizeof(obj: Any) -> int:
+    """Approximate the total in-memory size (bytes) of a nested container,
+    recursing through dicts/lists/tuples/sets/frozensets and counting each
+    distinct object once."""
+    seen: set[int] = set()
+    stack = [obj]
+    total = 0
+    while stack:
+        item = stack.pop()
+        if id(item) in seen:
+            continue
+        seen.add(id(item))
+        total += sys.getsizeof(item)
+        if isinstance(item, dict):
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple, set, frozenset)):
+            stack.extend(item)
+    return total
+
+
+def _fmt_bytes(n: int) -> str:
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f}{unit}"
+        size /= 1024
 
 
 # Load environment variables
@@ -74,35 +104,47 @@ async def lifespan(app: FastAPI):
         )
         s1 = time.monotonic()
         log.info(
-            f"[warmup] postprocess.load_synonym_map: {s1 - s0:.2f}s ({len(store.synonym_map)} concepts)"
+            f"[warmup] postprocess.load_synonym_map: {s1 - s0:.2f}s ({len(store.synonym_map)} concepts, {_fmt_bytes(_deep_sizeof(store.synonym_map))})"
         )
         store.synonym_token_index = build_synonym_token_index(store.synonym_map)
         s2 = time.monotonic()
         log.info(
-            f"[warmup] postprocess.build_synonym_token_index: {s2 - s1:.2f}s ({len(store.synonym_token_index)} tokens)"
+            f"[warmup] postprocess.build_synonym_token_index: {s2 - s1:.2f}s ({len(store.synonym_token_index)} tokens, {_fmt_bytes(_deep_sizeof(store.synonym_token_index))})"
         )
         store.acronym_index = ENGINE.build_acronym_index(concepts)
         s3 = time.monotonic()
         log.info(
-            f"[warmup] postprocess.build_acronym_index: {s3 - s2:.2f}s ({len(store.acronym_index)} acronyms)"
+            f"[warmup] postprocess.build_acronym_index: {s3 - s2:.2f}s ({len(store.acronym_index)} acronyms, {_fmt_bytes(_deep_sizeof(store.acronym_index))})"
         )
         store.name_token_index = build_name_token_index(concepts)
         s4 = time.monotonic()
         log.info(
-            f"[warmup] postprocess.build_name_token_index: {s4 - s3:.2f}s ({len(store.name_token_index)} tokens)"
+            f"[warmup] postprocess.build_name_token_index: {s4 - s3:.2f}s ({len(store.name_token_index)} tokens, {_fmt_bytes(_deep_sizeof(store.name_token_index))})"
         )
         store.ancestor_map = load_ancestor_map(
             OMOP_DB_CONFIG, [c["concept_id"] for c in concepts]
         )
         s5 = time.monotonic()
         log.info(
-            f"[warmup] postprocess.load_ancestor_map: {s5 - s4:.2f}s ({len(store.ancestor_map)} parents)"
+            f"[warmup] postprocess.load_ancestor_map: {s5 - s4:.2f}s ({len(store.ancestor_map)} parents, {_fmt_bytes(_deep_sizeof(store.ancestor_map))})"
         )
         store.concepts_by_id = build_concepts_by_id(concepts)
         s6 = time.monotonic()
         log.info(
-            f"[warmup] postprocess.build_concepts_by_id: {s6 - s5:.2f}s ({len(store.concepts_by_id)} concepts)"
+            f"[warmup] postprocess.build_concepts_by_id: {s6 - s5:.2f}s ({len(store.concepts_by_id)} concepts, {_fmt_bytes(_deep_sizeof(store.concepts_by_id))})"
         )
+        total_bytes = sum(
+            _deep_sizeof(m)
+            for m in (
+                store.synonym_map,
+                store.synonym_token_index,
+                store.acronym_index,
+                store.name_token_index,
+                store.ancestor_map,
+                store.concepts_by_id,
+            )
+        )
+        log.info(f"[warmup] postprocess: total lookup size {_fmt_bytes(total_bytes)}")
 
     # Concepts are loaded at startup for three reasons:
     #   1. FuzzyConceptResolver — iterates the full list on every resolve (RESOLVER_BACKEND=fuzzy).
