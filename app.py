@@ -123,14 +123,21 @@ async def lifespan(app: FastAPI):
     app.state.refresh_engine = refresh_engine
 
     def fingerprint():
-        """Cheap COUNT/MAX probe so an unchanged dataset skips the reload. The
-        latest_distributions row is authoritative (errors force a reload); the OMOP
+        """Cheap probe so an unchanged dataset skips the reload. Tracks the DISTINCT
+        concept set (what the in-memory state depends on) — NOT raw row count, which
+        churns with collection/count values that are read live per request anyway. The
+        latest_distributions probe is authoritative (errors force a reload); the OMOP
         counts are best-effort (qualified names in case OMOP is a separate DB)."""
         omop_db = OMOP_DB_CONFIG["database"]
         raw = refresh_engine.raw_connection()
         try:
-            dist = _scalar(raw, "SELECT COUNT(*), MAX(concept_id) FROM latest_distributions")
-            syn = _best_effort_scalar(raw, f"SELECT COUNT(*) FROM `{omop_db}`.concept_synonym")
+            dist = _scalar(
+                raw,
+                "SELECT COUNT(DISTINCT concept_id), MAX(concept_id) FROM latest_distributions",
+            )
+            syn = _best_effort_scalar(
+                raw, f"SELECT COUNT(*) FROM `{omop_db}`.concept_synonym"
+            )
             anc = _best_effort_scalar(
                 raw,
                 f"SELECT COUNT(*) FROM `{omop_db}`.concept_ancestor"
@@ -211,7 +218,7 @@ async def lifespan(app: FastAPI):
     # synonym/acronym maps from disk instead of re-querying MySQL on every save. Never in prod.
     cache_path = (
         os.getenv("CONCEPTS_CACHE_PATH", ".concepts_cache.pkl")
-        if APP_ENV == "development"
+        if APP_ENV == "local"
         else None
     )
     store = ResolverStore(
