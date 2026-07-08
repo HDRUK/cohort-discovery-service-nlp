@@ -8,6 +8,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from word2number import w2n
 
+from logging_config import get_logger
+
+log = get_logger()
+
 NEGATION_TERMS = {"no", "not", "without", "never"}
 
 
@@ -17,10 +21,10 @@ def load_mappings() -> Dict[str, Any]:
         with open(mappings_path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
     except FileNotFoundError:
-        print(f"[Config] mappings file not found: {mappings_path}")
+        log.warning(f"[Config] mappings file not found: {mappings_path}")
         sys.exit(1)
     except json.JSONDecodeError as exc:
-        print(f"[Config] invalid mappings JSON in {mappings_path}: {exc}")
+        log.warning(f"[Config] invalid mappings JSON in {mappings_path}: {exc}")
         sys.exit(1)
 
     compiled: Dict[str, List[Dict[str, Any]]] = {}
@@ -44,10 +48,10 @@ def load_rules() -> Dict[str, Any]:
         with open(rules_path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
     except FileNotFoundError:
-        print(f"[Config] rules file not found: {rules_path}")
+        log.warning(f"[Config] rules file not found: {rules_path}")
         sys.exit(1)
     except json.JSONDecodeError as exc:
-        print(f"[Config] invalid rules JSON in {rules_path}: {exc}")
+        log.warning(f"[Config] invalid rules JSON in {rules_path}: {exc}")
         sys.exit(1)
 
     acronym_rules = data.get(
@@ -107,6 +111,7 @@ def load_rules() -> Dict[str, Any]:
             for name, entry in data.get("unsupported_patterns", {}).items()
         },
         "acronym_rules": acronym_rules,
+        "medcat": data.get("medcat", {}),
     }
 
 
@@ -128,13 +133,14 @@ class RuleEngine:
         self.unsupported_patterns = self.rules["unsupported_patterns"]
         self.acronym_rules = self.rules["acronym_rules"]
         self.logical_operators = self.rules["logical_operators"]
+        self.medcat = self.rules.get("medcat", {})
 
     def split_candidates(self, text: str) -> List[str]:
         pattern = "|".join(self.splitters)
         candidates = [
             s.strip() for s in re.split(pattern, text, flags=re.IGNORECASE) if s.strip()
         ]
-        print(f"found candidates {candidates}")
+        log.debug(f"found candidates {candidates}")
         return candidates
 
     def strip_dangling_logical_operators(self, text: str) -> str:
@@ -372,7 +378,7 @@ class RuleEngine:
     def is_negated(self, text: str) -> bool:
         for term in NEGATION_TERMS:
             if re.search(rf"\b{re.escape(term)}\b", text, re.IGNORECASE):
-                print(f"Negation term matched: '{term}' in '{text}'")
+                log.debug(f"Negation term matched: '{term}' in '{text}'")
                 return True
         return False
 

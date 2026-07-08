@@ -152,6 +152,22 @@
       "pattern": "\\b(aged|age|over|under)\\b|\\b\\d+\\s*[-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2212]\\s*\\d+\\b|\\b\\d+\\+\\b"
     }
   },
+  "medcat": {
+    "token_min_len": 8,
+    "token_stopwords": [
+      "disorder",
+      "disorders",
+      "syndrome",
+      "syndromes",
+      "condition",
+      "conditions",
+      "secondary",
+      "unspecified",
+      "associated",
+      "including",
+      "specified"
+    ]
+  },
   "acronym_rules": {
     "min_len": 2,
     "max_len": 6,

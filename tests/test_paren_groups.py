@@ -1,12 +1,16 @@
 from fastapi.testclient import TestClient
 
 from app import app
-from fuzzy_concept_resolver import FuzzyConceptResolver
+from resolvers import FuzzyConceptResolver
 
 
 class LocalResolverStore:
     def __init__(self, resolver):
         self._resolver = resolver
+
+    @property
+    def resolver(self):
+        return self._resolver
 
     async def get_resolver(self):
         return self._resolver

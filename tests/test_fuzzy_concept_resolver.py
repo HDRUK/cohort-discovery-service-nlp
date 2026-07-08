@@ -1,7 +1,13 @@
 import math
 import os
 import pytest
-from fuzzy_concept_resolver import FuzzyConceptResolver, normalise_text, tokenise
+from resolvers import FuzzyConceptResolver
+from resolvers.fuzzy_concept_resolver import normalise_text, tokenise
+
+
+def _resolve(r, text):
+    """Resolvers expose a single search() method; these tests want the flat data list."""
+    return r.search(concept_names=[text])["data"]
 
 
 # Helpers
@@ -84,7 +90,7 @@ class TestCollectionBoost:
 
     def test_multi_collection_ranks_above_single(self):
         r = self._make_resolver()
-        results = r.resolve("hypertension")
+        results = _resolve(r, "hypertension")
         assert len(results) == 2
         assert results[0]["concept_id"] == 2, (
             "Concept with ncollections=10 should rank first"
@@ -94,7 +100,7 @@ class TestCollectionBoost:
         """Score difference should equal log(ncollections) * weight."""
         boost_weight = 1.5
         r = self._make_resolver(boost_weight=boost_weight)
-        results = r.resolve("hypertension")
+        results = _resolve(r, "hypertension")
         by_id = {c["concept_id"]: c["match_score"] for c in results}
 
         expected_boost = math.log(10) * boost_weight
@@ -107,13 +113,13 @@ class TestCollectionBoost:
         """ncollections == 1 must not receive any boost."""
         boost_weight = 1.5
         r = self._make_resolver(boost_weight=boost_weight)
-        results = r.resolve("hypertension")
+        results = _resolve(r, "hypertension")
         by_id = {c["concept_id"]: c["match_score"] for c in results}
 
         # With two identical strings, the base scores are the same;
         # concept 1 should have no extra bonus applied.
         r_no_boost = self._make_resolver(boost_weight=0)
-        results_no_boost = r_no_boost.resolve("hypertension")
+        results_no_boost = _resolve(r_no_boost, "hypertension")
         by_id_no_boost = {c["concept_id"]: c["match_score"] for c in results_no_boost}
 
         assert by_id[1] == pytest.approx(by_id_no_boost[1], abs=0.01), (
@@ -130,7 +136,7 @@ class TestCollectionBoost:
                 ],
                 threshold=50,
             )
-        results = r.resolve("hypertension")
+        results = _resolve(r, "hypertension")
         scores = [c["match_score"] for c in results]
         assert scores[0] == pytest.approx(scores[1], abs=0.01), (
             "With boost_weight=0, scores must be equal regardless of ncollections"
@@ -145,7 +151,7 @@ class TestCollectionBoost:
         ]
         with patch_env({"COLLECTION_BOOST_WEIGHT": "1.5"}):
             r = FuzzyConceptResolver(concepts, threshold=50)
-        results = r.resolve("hypertension")
+        results = _resolve(r, "hypertension")
         by_id = {c["concept_id"]: c["match_score"] for c in results}
 
         assert by_id[3] > by_id[2] > by_id[1], (
@@ -160,7 +166,7 @@ class TestCollectionBoost:
         ]
         with patch_env({"COLLECTION_BOOST_WEIGHT": "1.5"}):
             r = FuzzyConceptResolver(concepts, threshold=50)
-        results = r.resolve("hypertension")
+        results = _resolve(r, "hypertension")
         assert len(results) == 2
         by_id = {c["concept_id"]: c["match_score"] for c in results}
         assert by_id[2] > by_id[1]
@@ -178,18 +184,18 @@ class TestResolverGeneral:
             self.r = FuzzyConceptResolver(concepts, threshold=70)
 
     def test_exact_match_returns_result(self):
-        results = self.r.resolve("type 2 diabetes mellitus")
+        results = _resolve(self.r, "type 2 diabetes mellitus")
         assert any(c["concept_id"] == 1 for c in results)
 
     def test_no_match_returns_empty(self):
-        results = self.r.resolve("zzzznotaconceptzzz")
+        results = _resolve(self.r, "zzzznotaconceptzzz")
         assert results == []
 
     def test_empty_input_returns_empty(self):
-        assert self.r.resolve("") == []
+        assert _resolve(self.r, "") == []
 
     def test_results_sorted_by_score_descending(self):
-        results = self.r.resolve("diabetes")
+        results = _resolve(self.r, "diabetes")
         scores = [c["match_score"] for c in results]
         assert scores == sorted(scores, reverse=True)
 
@@ -201,7 +207,7 @@ class TestResolverGeneral:
         ]
         with patch_env({"COLLECTION_BOOST_WEIGHT": "0"}):
             r = FuzzyConceptResolver(concepts, threshold=50)
-        results = r.resolve("diabetes")
+        results = _resolve(r, "diabetes")
         by_id = {c["concept_id"]: c["match_score"] for c in results}
         assert by_id[1] > by_id[2], (
             "Concept with 'secondary' (downstream token) should score lower"
