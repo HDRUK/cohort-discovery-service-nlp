@@ -3,6 +3,7 @@ from typing import Any, Dict, List
 
 import mysql.connector
 
+from helpers import chunked
 from logging_config import get_logger
 
 log = get_logger()
@@ -37,17 +38,21 @@ def load_ancestor_map(
                 "[Start-up] concept_ancestor table not found — child concepts disabled"
             )
             return {}
-        placeholders = ",".join(["%s"] * len(concept_ids))
         t1 = time.monotonic()
+        # Query in bounded id-chunks rather than one giant IN (...) clause, which is slow for
+        # mysql.connector to bind and MySQL to parse over the full concept set.
         cursor = conn.cursor(dictionary=True)
-        cursor.execute(
-            f"SELECT ancestor_concept_id, descendant_concept_id FROM concept_ancestor"
-            f" WHERE ancestor_concept_id IN ({placeholders})"
-            f" AND ancestor_concept_id != descendant_concept_id"
-            f" AND min_levels_of_separation = 1",
-            concept_ids,
-        )
-        rows = cursor.fetchall()
+        rows = []
+        for chunk in chunked(concept_ids):
+            placeholders = ",".join(["%s"] * len(chunk))
+            cursor.execute(
+                f"SELECT ancestor_concept_id, descendant_concept_id FROM concept_ancestor"
+                f" WHERE ancestor_concept_id IN ({placeholders})"
+                f" AND ancestor_concept_id != descendant_concept_id"
+                f" AND min_levels_of_separation = 1",
+                chunk,
+            )
+            rows.extend(cursor.fetchall())
         t2 = time.monotonic()
         # Dedup children per parent; skip descendants not in the loaded concept set.
         acc: Dict[int, set] = {}
@@ -67,7 +72,7 @@ def load_ancestor_map(
         )
         return result
     except Exception as e:
-        log.warning(f"[Start-up] Failed to load ancestor map: {e}")
+        log.error(f"[Start-up] Failed to load ancestor map: {e}", exc_info=True)
         return {}
     finally:
         if conn is not None:

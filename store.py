@@ -15,15 +15,30 @@ class ResolverStore:
         self,
         loader: Callable[[], List[Dict[str, Any]]],
         ttl_seconds: int,
-        postprocess: Optional[Callable[["ResolverStore", List[Dict[str, Any]]], None]] = None,
+        build_core: Optional[
+            Callable[["ResolverStore", List[Dict[str, Any]]], None]
+        ] = None,
+        load_enrichment: Optional[
+            Callable[["ResolverStore", List[Dict[str, Any]]], None]
+        ] = None,
         cache_path: Optional[str] = None,
         fingerprint: Optional[Callable[[], Any]] = None,
     ):
         self._loader = loader
         self._ttl = ttl_seconds
-        self._postprocess = postprocess
+        # Two-phase warm-up: build_core builds the fast matching indexes in seconds;
+        # load_enrichment runs the slow serialised DB loads. Each flips its own has_loaded_* flag.
+        self._build_core = build_core
+        self._load_enrichment = load_enrichment
         self._lock = asyncio.Lock()
         self._refresh_task: Optional[asyncio.Task] = None
+
+        # Per-capability flags, monotonic: set True as data lands, never reset on refresh (old
+        # maps stay live), so a capability once on stays on even if a later reload fails.
+        self._core_loaded = False
+        self._acronyms_loaded = False
+        self._synonyms_loaded = False
+        self._ancestors_loaded = False
 
         # Cheap change-detection probe; when it matches the last load, skip the reload.
         self._fingerprint = fingerprint
@@ -94,6 +109,48 @@ class ResolverStore:
     def concepts_by_id(self, value: Dict[int, Dict[str, Any]]) -> None:
         self._concepts_by_id = value
 
+    @property
+    def has_loaded_core(self) -> bool:
+        return self._core_loaded
+
+    @has_loaded_core.setter
+    def has_loaded_core(self, value: bool) -> None:
+        self._core_loaded = value
+
+    @property
+    def has_loaded_acronyms(self) -> bool:
+        return self._acronyms_loaded
+
+    @has_loaded_acronyms.setter
+    def has_loaded_acronyms(self, value: bool) -> None:
+        self._acronyms_loaded = value
+
+    @property
+    def has_loaded_synonyms(self) -> bool:
+        return self._synonyms_loaded
+
+    @has_loaded_synonyms.setter
+    def has_loaded_synonyms(self, value: bool) -> None:
+        self._synonyms_loaded = value
+
+    @property
+    def has_loaded_ancestors(self) -> bool:
+        return self._ancestors_loaded
+
+    @has_loaded_ancestors.setter
+    def has_loaded_ancestors(self, value: bool) -> None:
+        self._ancestors_loaded = value
+
+    @property
+    def fully_warm(self) -> bool:
+        """True once every capability has loaded (core + acronyms + synonyms + ancestors)."""
+        return (
+            self._core_loaded
+            and self._acronyms_loaded
+            and self._synonyms_loaded
+            and self._ancestors_loaded
+        )
+
     async def get_resolver(self) -> FuzzyConceptResolver:
         now = time.monotonic()
         if self._resolver and (now - self._loaded_at) < self._ttl:
@@ -120,7 +177,9 @@ class ResolverStore:
             await self._refresh(label="background-initial")
         while True:
             await asyncio.sleep(self._ttl)
-            log.info(f"[warmup] periodic background refresh triggered (ttl={self._ttl}s)")
+            log.info(
+                f"[warmup] periodic background refresh triggered (ttl={self._ttl}s)"
+            )
             await self._refresh(label="background-periodic")
 
     def _read_snapshot(self) -> Optional[Dict[str, Any]]:
@@ -129,7 +188,9 @@ class ResolverStore:
             with open(self._cache_path, "rb") as fh:
                 return pickle.load(fh)
         except Exception as exc:
-            log.info(f"[warmup] snapshot read failed ({exc}); falling back to live load")
+            log.info(
+                f"[warmup] snapshot read failed ({exc}); falling back to live load"
+            )
             return None
 
     def _write_snapshot(self, data: Dict[str, Any]) -> None:
@@ -155,9 +216,13 @@ class ResolverStore:
                 snapshot = await asyncio.to_thread(self._read_snapshot)
                 if snapshot is not None:
                     try:
-                        log.info("[warmup] snapshot: rebuilding resolver (pretokenised)")
+                        log.info(
+                            "[warmup] snapshot: rebuilding resolver (pretokenised)"
+                        )
                         resolver = await asyncio.to_thread(
-                            FuzzyConceptResolver, snapshot["concepts"], pretokenised=True
+                            FuzzyConceptResolver,
+                            snapshot["concepts"],
+                            pretokenised=True,
                         )
                         resolver._store = self
                         self._synonym_map = snapshot["synonym_map"]
@@ -177,6 +242,11 @@ class ResolverStore:
                             "concepts_by_id"
                         ) or build_concepts_by_id(snapshot["concepts"])
                         self._resolver = resolver
+                        # A snapshot restores every map at once, so all capabilities are ready.
+                        self._core_loaded = True
+                        self._acronyms_loaded = True
+                        self._synonyms_loaded = True
+                        self._ancestors_loaded = True
                         self._snapshot_mtime = mtime
                         self._loaded_at = time.monotonic()
                         log.info(
@@ -186,7 +256,10 @@ class ResolverStore:
                         )
                         return
                     except Exception as exc:
-                        log.info(f"[warmup] snapshot restore failed ({exc}); falling back to live load")
+                        log.error(
+                            f"[warmup] snapshot restore failed ({exc}); falling back to live load",
+                            exc_info=True,
+                        )
 
             # Skip the reload when the probe matches the last load. Bypassed on first load
             # (no resolver) and on probe error (reload rather than skip blindly).
@@ -195,41 +268,67 @@ class ResolverStore:
                 try:
                     fp = await asyncio.to_thread(self._fingerprint)
                 except Exception as exc:
-                    log.info(f"[warmup] fingerprint probe failed ({exc}); doing full reload")
+                    log.info(
+                        f"[warmup] fingerprint probe failed ({exc}); doing full reload"
+                    )
                     fp = None
                 if fp is not None and fp == self._last_fingerprint:
-                    log.info("[warmup] data unchanged (fingerprint match) — skipping reload")
+                    log.info(
+                        "[warmup] data unchanged (fingerprint match) — skipping reload"
+                    )
                     self._loaded_at = time.monotonic()
                     return
 
+            # Phase 1 — core: load + tokenise + fast matching indexes. On success we flip the
+            # readiness signal immediately and run the slow enrichment loads afterwards.
             try:
                 log.info(f"[warmup] loader: querying concepts ({label})")
                 concepts = await asyncio.to_thread(self._loader)
                 t1 = time.monotonic()
-                log.info(f"[warmup] loader done: {t1 - t0:.2f}s ({len(concepts)} concepts)")
+                log.info(
+                    f"[warmup] loader done: {t1 - t0:.2f}s ({len(concepts)} concepts)"
+                )
 
                 log.info("[warmup] tokenise: building FuzzyConceptResolver")
                 resolver = await asyncio.to_thread(FuzzyConceptResolver, concepts)
+                resolver._store = self
                 t2 = time.monotonic()
                 log.info(f"[warmup] tokenise done: {t2 - t1:.2f}s")
+
+                if self._build_core:
+                    log.info("[warmup] core: building name/acronym/concepts indexes")
+                    await asyncio.to_thread(self._build_core, self, concepts)
             except Exception as exc:
-                log.info(f"[warmup] refresh failed: {exc}")
+                log.error(f"[warmup] core warm-up failed: {exc}", exc_info=True)
                 return
-
-            resolver._store = self
-
-            if self._postprocess:
-                try:
-                    log.info("[warmup] postprocess: synonym map + acronym index")
-                    await asyncio.to_thread(self._postprocess, self, concepts)
-                    t3 = time.monotonic()
-                    log.info(f"[warmup] postprocess done: {t3 - t2:.2f}s")
-                except Exception as exc:
-                    log.info(f"[warmup] postprocess failed: {exc}")
 
             self._resolver = resolver
             self._loaded_at = time.monotonic()
-            log.info(f"[warmup] READY — full mode ({label} load complete: {self._loaded_at - t0:.2f}s)")
+            log.info(
+                f"[warmup] CORE READY — fast matching live ({self._loaded_at - t0:.2f}s);"
+                " enrichment (synonyms, ancestors) loading in background"
+            )
+
+            # Phase 2 — enrichment: slow serialised DB loads. A failure here leaves core serving;
+            # the unloaded flag stays False so it's retried next cycle.
+            if self._load_enrichment:
+                try:
+                    log.info("[warmup] enrichment: loading synonym + ancestor maps")
+                    await asyncio.to_thread(self._load_enrichment, self, concepts)
+                except Exception as exc:
+                    log.error(f"[warmup] enrichment load failed: {exc}", exc_info=True)
+
+            syn_state = "OK" if self._synonym_map else "DISABLED"
+            anc_state = "OK" if self._ancestor_map else "DISABLED"
+            log.info(
+                f"[warmup] READY — full mode ({label} load complete: "
+                f"{time.monotonic() - t0:.2f}s; synonyms={syn_state} ancestors={anc_state})"
+            )
+
+            # Only record fingerprint + snapshot once fully warm — otherwise a matching probe
+            # next cycle would skip the reload and leave enrichment permanently empty.
+            if not self.fully_warm:
+                return
 
             # Record this load's fingerprint for the next cycle (on first load fp is
             # still None here, so compute it now).
@@ -238,7 +337,9 @@ class ResolverStore:
                     try:
                         fp = await asyncio.to_thread(self._fingerprint)
                     except Exception as exc:
-                        log.info(f"[warmup] fingerprint capture failed ({exc}); next cycle will reload")
+                        log.info(
+                            f"[warmup] fingerprint capture failed ({exc}); next cycle will reload"
+                        )
                         fp = None
                 self._last_fingerprint = fp
 

@@ -11,10 +11,15 @@ class _MinimalStore:
     acronym_index = {}
     ancestor_map = {}
     concepts_by_id = {}
-    # Truthy sentinel: endpoint tests exercise the fully-warm path. `resolver` being
-    # non-None is the resolver's "warm-up complete" signal; reduced-mode behaviour is
-    # covered separately (see _ColdStore in test_resolver_performance_paths.py).
+    # Endpoint tests exercise the fully-warm path. Each capability has its own has_loaded_*
+    # flag (the resolver gates per-flag now); reduced/partial-warm behaviour is covered
+    # separately (see _ColdStore in test_resolver_performance_paths.py).
     resolver = object()
+    has_loaded_core = True
+    has_loaded_acronyms = True
+    has_loaded_synonyms = True
+    has_loaded_ancestors = True
+    fully_warm = True
 
     async def get_resolver(self):
         return self.resolver

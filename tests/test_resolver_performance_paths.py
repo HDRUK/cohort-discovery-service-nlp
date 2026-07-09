@@ -95,6 +95,12 @@ class _Store:
         self.name_token_index = build_name_token_index(concepts)
         self.ancestor_map = ancestor_map or {}
         self.concepts_by_id = build_concepts_by_id(concepts)
+        # Fully warm: every capability's data has loaded.
+        self.has_loaded_core = True
+        self.has_loaded_acronyms = True
+        self.has_loaded_synonyms = True
+        self.has_loaded_ancestors = True
+        self.fully_warm = True
 
 
 def _mock_engine(rows):
@@ -157,10 +163,10 @@ def test_include_ancestors_hydrates_children_from_map():
 
 
 # --------------------------------------------------------------------------
-# reduced mode during warm-up (store.resolver is None) -> skip enrichment
+# reduced mode during warm-up (nothing loaded yet) -> skip enrichment
 # --------------------------------------------------------------------------
 class _ColdStore:
-    """Store mid warm-up: resolver not yet set, indexes still empty."""
+    """Store at the very start of warm-up: nothing loaded, every flag False."""
 
     def __init__(self):
         self.resolver = None
@@ -170,6 +176,11 @@ class _ColdStore:
         self.name_token_index = {}
         self.ancestor_map = {}
         self.concepts_by_id = {}
+        self.has_loaded_core = False
+        self.has_loaded_acronyms = False
+        self.has_loaded_synonyms = False
+        self.has_loaded_ancestors = False
+        self.fully_warm = False
 
 
 def test_reduced_mode_uses_like_and_skips_extras():
@@ -198,6 +209,57 @@ def test_reduced_mode_uses_like_and_skips_extras():
     assert "d.concept_name LIKE" in sql          # LIKE fallback, no name-token index
     assert "collection_stats AS" not in sql      # collection scoring skipped
     assert "d.concept_id IN" not in sql          # no fast candidate pre-filter
+    assert sql.count("%s") == len(bindings)       # placeholder/binding alignment guard
+
+
+# --------------------------------------------------------------------------
+# partial warm-up: core (fast matching) ready, enrichment still loading
+# --------------------------------------------------------------------------
+class _PartialStore:
+    """Store mid warm-up: name-token index (core) is built, but the synonym and
+    ancestor DB loads haven't completed."""
+
+    def __init__(self, concepts):
+        self.resolver = _Resolver(concepts)
+        self.synonym_map = {}
+        self.synonym_token_index = {}
+        self.acronym_index = {}
+        self.name_token_index = build_name_token_index(concepts)
+        self.ancestor_map = {}
+        self.concepts_by_id = build_concepts_by_id(concepts)
+        self.has_loaded_core = True
+        self.has_loaded_acronyms = True
+        self.has_loaded_synonyms = False
+        self.has_loaded_ancestors = False
+        self.fully_warm = False
+
+
+def test_core_ready_uses_fast_path_but_skips_unloaded_enrichment():
+    rows = [{"concept_id": 24006, "name": "Sickle cell-hemoglobin C disease",
+             "category": "Condition", "match_score": 500, "collection_score": 0,
+             "ncollections": 1, "count": 10, "cnt": 1}]
+    engine, cursor = _mock_engine(rows)
+    cursor.fetchone.return_value = {"cnt": 1}
+    medcat = MagicMock()
+    medcat.expand.return_value = []
+    resolver = MySQLConceptResolver(engine, _PartialStore(_CONCEPTS), medcat_client=medcat)
+
+    result = resolver.search(
+        concept_names=["sickle"],
+        collection_ids=[1, 3],
+        include_ancestors=True,
+        use_medcat=True,
+        use_synonym_lookup=True,
+        use_collection_score=True,
+    )
+
+    # core ready -> MedCAT expansion runs and collection scoring is applied (both gated on core)
+    medcat.expand.assert_called()
+    sql, bindings = cursor.execute.call_args[0]  # last call == main query
+    assert "d.concept_id IN" in sql              # fast candidate pre-filter (name-token index)
+    assert "collection_stats AS" in sql          # collection scoring on
+    # ancestors not loaded -> children are not hydrated even though include_ancestors=True
+    assert "children" not in result["data"][0]
     assert sql.count("%s") == len(bindings)       # placeholder/binding alignment guard
 
 

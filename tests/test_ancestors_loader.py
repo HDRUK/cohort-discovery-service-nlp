@@ -48,7 +48,7 @@ def test_bindings_single_sided_parent_and_excludes_self():
 
     # The second execute is the SELECT (the first is the SHOW TABLES probe).
     sql, bindings = cursor.execute.call_args_list[-1][0]
-    # Only the parent side is bound in SQL now; the child side is filtered in Python.
+    # Only the parent side is bound in SQL; the child side is filtered in Python.
     assert sql.count("IN (") == 1
     assert "ancestor_concept_id IN (" in sql
     assert "descendant_concept_id IN (" not in sql
@@ -67,6 +67,20 @@ def test_descendant_not_in_concept_set_is_filtered_out():
     with patch("mysql.connector.connect", return_value=conn):
         result = load_ancestor_map(DB_CONFIG, [1, 2])
     assert result == {1: [2]}
+
+
+def test_ids_are_queried_in_chunks():
+    conn, cursor = _mock_conn(rows=[])
+    with patch("mysql.connector.connect", return_value=conn):
+        load_ancestor_map(DB_CONFIG, list(range(10001)))
+
+    # One SHOW TABLES probe + one SELECT per 10000-id chunk (10001 ids -> 2 chunks).
+    selects = [
+        c for c in cursor.execute.call_args_list if "FROM concept_ancestor" in c[0][0]
+    ]
+    assert len(selects) == 2
+    assert len(selects[0][0][1]) == 10000
+    assert len(selects[1][0][1]) == 1
 
 
 def test_exception_returns_empty():
