@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import sys
 import time
@@ -22,29 +23,9 @@ from resolvers import MedCATClient, MySQLConceptResolver
 from rules_engine import RuleEngine
 from store import ResolverStore
 from logging_config import get_logger
+from pympler import asizeof
 
 log = get_logger()
-
-
-def _deep_sizeof(obj: Any) -> int:
-    """Approximate the total in-memory size (bytes) of a nested container,
-    recursing through dicts/lists/tuples/sets/frozensets and counting each
-    distinct object once."""
-    seen: set[int] = set()
-    stack = [obj]
-    total = 0
-    while stack:
-        item = stack.pop()
-        if id(item) in seen:
-            continue
-        seen.add(id(item))
-        total += sys.getsizeof(item)
-        if isinstance(item, dict):
-            stack.extend(item.keys())
-            stack.extend(item.values())
-        elif isinstance(item, (list, tuple, set, frozenset)):
-            stack.extend(item)
-    return total
 
 
 def _fmt_bytes(n: int) -> str:
@@ -147,21 +128,15 @@ async def lifespan(app: FastAPI):
         finally:
             raw.close()
 
-    def enrich_resolver(store, concepts):
-        # CPU builds run concurrently (no DB); the synonym + ancestor DB loads run
-        # sequentially so only one heavy query hits MySQL at a time during a reload.
-        concept_ids = [c["concept_id"] for c in concepts]
+    def _timed(name, fn):
+        t0 = time.monotonic()
+        result = fn()
+        log.info(f"[warmup] postprocess.{name}: {time.monotonic() - t0:.2f}s")
+        return result
 
-        def _timed(name, fn):
-            t0 = time.monotonic()
-            result = fn()
-            log.info(f"[warmup] postprocess.{name}: {time.monotonic() - t0:.2f}s")
-            return result
-
-        def _load_synonyms():
-            m = load_synonym_map(OMOP_DB_CONFIG, concept_ids)
-            return m, build_synonym_token_index(m)
-
+    def build_core_indexes(store, concepts):
+        # Fast phase: three CPU builds (no DB) concurrently. Flips has_loaded_core +
+        # has_loaded_acronyms so matching goes live before the slow DB loads.
         p0 = time.monotonic()
         with ThreadPoolExecutor(max_workers=3, thread_name_prefix="warmup") as ex:
             f_acr = ex.submit(
@@ -178,34 +153,52 @@ async def lifespan(app: FastAPI):
                 _timed, "build_concepts_by_id", lambda: build_concepts_by_id(concepts)
             )
 
-            store.synonym_map, store.synonym_token_index = _timed(
-                "synonym_map+token_index", _load_synonyms
-            )
-            store.ancestor_map = _timed(
-                "load_ancestor_map",
-                lambda: load_ancestor_map(OMOP_DB_CONFIG, concept_ids),
-            )
-
-            store.acronym_index = f_acr.result()
             store.name_token_index = f_name.result()
             store.concepts_by_id = f_cbi.result()
-        log.info(
-            f"[warmup] postprocess: all lookups built in {time.monotonic() - p0:.2f}s"
-            " (DB loads serialised)"
-        )
+            store.has_loaded_core = True
 
-        total_bytes = sum(
-            _deep_sizeof(m)
-            for m in (
-                store.synonym_map,
-                store.synonym_token_index,
-                store.acronym_index,
-                store.name_token_index,
-                store.ancestor_map,
-                store.concepts_by_id,
-            )
+            store.acronym_index = f_acr.result()
+            store.has_loaded_acronyms = True
+        log.info(f"[warmup] core indexes built in {time.monotonic() - p0:.2f}s")
+
+    def load_enrichment(store, concepts):
+        # Slow phase: two heavy DB loads run sequentially (one query on MySQL at a time), each
+        # flipping its flag as its map lands so synonyms switch on without waiting for ancestors.
+        concept_ids = [c["concept_id"] for c in concepts]
+        p0 = time.monotonic()
+
+        def _load_synonyms():
+            m = load_synonym_map(OMOP_DB_CONFIG, concept_ids)
+            return m, build_synonym_token_index(m)
+
+        store.synonym_map, store.synonym_token_index = _timed(
+            "synonym_map+token_index", _load_synonyms
         )
-        log.info(f"[warmup] postprocess: total lookup size {_fmt_bytes(total_bytes)}")
+        store.has_loaded_synonyms = True
+
+        store.ancestor_map = _timed(
+            "load_ancestor_map",
+            lambda: load_ancestor_map(OMOP_DB_CONFIG, concept_ids),
+        )
+        store.has_loaded_ancestors = True
+        log.info(f"[warmup] enrichment loaded in {time.monotonic() - p0:.2f}s")
+
+        # asizeof walks the full ~95MB of maps — as costly as the loads — so DEBUG-only.
+        if log.isEnabledFor(logging.DEBUG):
+            total_bytes = sum(
+                asizeof.asizeof(m)
+                for m in (
+                    store.synonym_map,
+                    store.synonym_token_index,
+                    store.acronym_index,
+                    store.name_token_index,
+                    store.ancestor_map,
+                    store.concepts_by_id,
+                )
+            )
+            log.debug(
+                f"[warmup] postprocess: total lookup size {_fmt_bytes(total_bytes)}"
+            )
 
     # Concepts are loaded at startup for three reasons:
     #   1. FuzzyConceptResolver — iterates the full list on every resolve (RESOLVER_BACKEND=fuzzy).
@@ -224,7 +217,8 @@ async def lifespan(app: FastAPI):
     store = ResolverStore(
         lambda: load_concepts_from_mysql(refresh_engine),
         ttl_seconds=STORE_REFRESH_TTL,
-        postprocess=enrich_resolver,
+        build_core=build_core_indexes,
+        load_enrichment=load_enrichment,
         cache_path=cache_path,
         fingerprint=fingerprint,
     )
@@ -375,12 +369,14 @@ def extract_entities(
         f"phrase_first={phrase_first} backend={RESOLVER_BACKEND}"
     )
 
-    if store.resolver is None:
-        log.info("[warmup] /extract in reduced mode (concepts still loading)")
+    if not store.has_loaded_core:
+        log.warning("[warmup] /extract in reduced mode (concepts still loading)")
 
     if RESOLVER_BACKEND == "fuzzy":
-        # Non-blocking: use the fuzzy resolver if ready, else use SQL until warm-up completes.
-        resolver = store.resolver or request.app.state.sql_resolver
+        # Fuzzy quality depends on synonym/acronym enrichment, so use it only once fully warm.
+        resolver = (
+            store.resolver if store.fully_warm else request.app.state.sql_resolver
+        )
     else:
         resolver = request.app.state.sql_resolver
 
@@ -418,13 +414,20 @@ def root():
 
 @app.get("/health/ready")
 def readiness(response: Response, store: ResolverStore = Depends(get_resolver_store)):
-    # store.resolver is set only at the end of warm-up, after every index is populated,
-    # so it is an exact "fully warm" signal for both resolver backends. 503 keeps traffic
-    # off the pod (via the k8s readinessProbe) until warm-up completes; 200 once ready.
-    if store.resolver is None:
+    # 503 until core (fast matching) is ready, then 200; the body reports each capability so
+    # this doubles as a warm-up dashboard: warming → degraded (core up) → ready (fully warm).
+    core = store.has_loaded_core
+    if not core:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {"status": "warming"}
-    return {"status": "ready"}
+    return {
+        "status": "ready" if store.fully_warm else ("degraded" if core else "warming"),
+        "loaded": {
+            "core": store.has_loaded_core,
+            "acronyms": store.has_loaded_acronyms,
+            "synonyms": store.has_loaded_synonyms,
+            "ancestors": store.has_loaded_ancestors,
+        },
+    }
 
 
 @app.get("/acronyms", response_model=AcronymResponse)

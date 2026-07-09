@@ -11,6 +11,11 @@ class LocalResolverStore:
         self.synonym_map = {}
         self.acronym_index = acronym_index or {}
         self.resolver = resolver
+        self.has_loaded_core = True
+        self.has_loaded_acronyms = True
+        self.has_loaded_synonyms = True
+        self.has_loaded_ancestors = True
+        self.fully_warm = True
 
     async def get_resolver(self):
         return self._resolver

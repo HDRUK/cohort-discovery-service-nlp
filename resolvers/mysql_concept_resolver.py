@@ -55,20 +55,28 @@ class MySQLConceptResolver(BaseResolver):
         concept_ids = concept_ids or []
         concept_names = concept_names or []
 
-        # During background warm-up the in-memory indexes aren't populated yet
-        # (store.resolver is set only once every index is built — the same "fully
-        # warm" signal used by /health/ready). Skip the enrichment steps that
-        # depend on that state and serve a simple LIKE-matched result, so requests
-        # aren't slowed by MedCAT / collection-score work on top of the LIKE scan.
-        warm = self._store is not None and self._store.resolver is not None
-        if not warm:
-            use_medcat = False
-            use_synonym_lookup = False
-            use_collection_score = False
-            include_ancestors = False
+        # Gate each capability on its own warm-up flag (snapshotted into locals to avoid a
+        # mid-request flip). collection-score + medcat need `core` (the fast candidate path);
+        # without it they'd only add work on top of a LIKE scan.
+        store = self._store
+        core = store is not None and store.has_loaded_core
+        has_synonyms = store is not None and store.has_loaded_synonyms
+        has_ancestors = store is not None and store.has_loaded_ancestors
+
+        use_synonym_lookup = use_synonym_lookup and has_synonyms
+        include_ancestors = include_ancestors and has_ancestors
+        use_collection_score = use_collection_score and core
+        use_medcat = use_medcat and core
+
+        loading = [
+            name
+            for name, ready in (("synonyms", has_synonyms), ("ancestors", has_ancestors))
+            if not ready
+        ]
+        if loading:
             log.info(
-                "[Resolver] reduced mode (warm-up in progress): skipping"
-                " medcat/synonym/collection-score/ancestors"
+                "[Resolver] serving with enrichment still loading: "
+                + " ".join(f"{name}=loading" for name in loading)
             )
 
         medcat_names = self._expand_medcat(concept_names, use_medcat)

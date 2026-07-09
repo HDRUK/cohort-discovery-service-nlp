@@ -3,6 +3,7 @@ from typing import Any, Dict, FrozenSet, List, Tuple
 
 import mysql.connector
 
+from helpers import chunked
 from logging_config import get_logger
 
 log = get_logger()
@@ -27,7 +28,9 @@ def build_synonym_token_index(
     return index
 
 
-def load_synonym_map(db_config: Dict[str, Any], concept_ids: List[int]) -> Dict[int, List[str]]:
+def load_synonym_map(
+    db_config: Dict[str, Any], concept_ids: List[int]
+) -> Dict[int, List[str]]:
     """Load synonyms for the given concept_ids from concept_synonym, keyed by concept_id.
 
     Bounded by the distribution view concept set so we never scan the full table.
@@ -43,16 +46,22 @@ def load_synonym_map(db_config: Dict[str, Any], concept_ids: List[int]) -> Dict[
         exists = cursor.fetchone()
         cursor.close()
         if not exists:
-            log.warning("[Start-up] concept_synonym table not found — synonym search disabled")
+            log.warning(
+                "[Start-up] concept_synonym table not found — synonym search disabled"
+            )
             return {}
-        placeholders = ",".join(["%s"] * len(concept_ids))
         t1 = time.monotonic()
+        # Query in bounded id-chunks rather than one giant IN (...) clause, which is slow for
+        # mysql.connector to bind and MySQL to parse over the full concept set.
         cursor = conn.cursor(dictionary=True)
-        cursor.execute(
-            f"SELECT concept_id, concept_synonym_name FROM concept_synonym WHERE concept_id IN ({placeholders})",
-            concept_ids,
-        )
-        rows = cursor.fetchall()
+        rows = []
+        for chunk in chunked(concept_ids):
+            placeholders = ",".join(["%s"] * len(chunk))
+            cursor.execute(
+                f"SELECT concept_id, concept_synonym_name FROM concept_synonym WHERE concept_id IN ({placeholders})",
+                chunk,
+            )
+            rows.extend(cursor.fetchall())
         t2 = time.monotonic()
         result: Dict[int, List[str]] = {}
         for row in rows:
@@ -68,7 +77,7 @@ def load_synonym_map(db_config: Dict[str, Any], concept_ids: List[int]) -> Dict[
         )
         return result
     except Exception as e:
-        log.warning(f"[Start-up] Failed to load synonym map: {e}")
+        log.error(f"[Start-up] Failed to load synonym map: {e}", exc_info=True)
         return {}
     finally:
         conn.close()
