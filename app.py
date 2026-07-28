@@ -1,23 +1,47 @@
+import asyncio
+import logging
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
-import mysql.connector
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, Query, Request, Response, status
 from pydantic import BaseModel
+from sqlalchemy import create_engine
+from sqlalchemy.engine import URL as EngineURL
 
+from concepts import router as concepts_router
+from loaders.ancestors import load_ancestor_map
+from loaders.concepts import load_concepts_from_mysql
+from loaders.synonyms import build_synonym_token_index, load_synonym_map
+from resolvers.sql_helpers import build_concepts_by_id, build_name_token_index
 from parsing import QueryParser
+from resolvers import MedCATClient, MySQLConceptResolver
 from rules_engine import RuleEngine
 from store import ResolverStore
+from logging_config import get_logger
+from pympler import asizeof
+
+log = get_logger()
+
+
+def _fmt_bytes(n: int) -> str:
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f}{unit}"
+        size /= 1024
 
 
 # Load environment variables
 load_dotenv()
 
-STORE_REFRESH_TTL = int(os.getenv("STORE_REFRESH_TTL", 60))
+STORE_REFRESH_TTL = int(os.getenv("STORE_REFRESH_TTL", 300))
+RESOLVER_BACKEND = os.getenv("RESOLVER_BACKEND", "sql")
+APP_ENV = os.getenv("APP_ENV", "production").lower()
 
 # MySQL config
 DB_CONFIG = {
@@ -28,86 +52,205 @@ DB_CONFIG = {
     "port": int(os.getenv("DB_PORT", 3306)),
 }
 
-VIEW_NAME = os.getenv("OMOP_VIEW", "distribution_concepts")
+# OMOP vocabulary DB — may differ from the app DB (e.g. concept_synonym lives here).
+# Falls back to DB_NAME if OMOP_DB_NAME is not set.
+OMOP_DB_CONFIG = {
+    **DB_CONFIG,
+    "database": os.getenv("OMOP_DB_NAME", os.getenv("DB_NAME")),
+}
+
 DEFAULT_THRESHOLD = int(os.getenv("DEFAULT_THRESHOLD", 90))
 
 
-# ------------------------------------------------------------
-# Load OMOP concepts from MySQL
-# ------------------------------------------------------------
-def load_concepts_from_mysql():
-    start_time = time.time()
-
-    # Connection phase
-    conn_start = time.time()
-    conn = mysql.connector.connect(**DB_CONFIG)
-    cursor = conn.cursor(dictionary=True)
-    conn_time = time.time() - conn_start
-
-    # Query execution phase
-    query_start = time.time()
-    cursor.execute(
-        f"""
-        SELECT
-            concept_id,
-            concept_name,
-            concept_name as description,
-            domain_id,
-            vocabulary_id,
-            concept_class,
-            standard_concept,
-            concept_code,
-            count,
-            ncollections,
-            all_synthetic
-        FROM {VIEW_NAME}
-        WHERE concept_name IS NOT NULL;
-        """
+def _build_engine(cfg: dict, pool_size: int = 5, max_overflow: int = 10):
+    url = EngineURL.create(
+        drivername="mysql+mysqlconnector",
+        username=cfg["user"],
+        password=cfg["password"],
+        host=cfg["host"],
+        port=cfg["port"],
+        database=cfg["database"],
     )
-    query_time = time.time() - query_start
-
-    # Fetch phase
-    fetch_start = time.time()
-    concepts = cursor.fetchall()
-    fetch_time = time.time() - fetch_start
-
-    conn.close()
-
-    total_time = time.time() - start_time
-
-    # Estimate memory usage (rough approximation)
-    concepts_size = sys.getsizeof(concepts)
-
-    # Print profiling information
-    print("\n[Profiling] load_concepts_from_mysql")
-    print(f"  - Connection time: {conn_time * 1000:.2f}ms")
-    print(f"  - Query execution time: {query_time * 1000:.2f}ms")
-    print(f"  - Fetch time: {fetch_time * 1000:.2f}ms")
-    print(f"  - Total time: {total_time * 1000:.2f}ms")
-    print(f"  - Concepts loaded: {len(concepts)}")
-    print(f"  - Estimated memory: {concepts_size / 1024 / 1024:.2f}MB")
-    print(f"  - TTL: {STORE_REFRESH_TTL}s\n")
-
-    return concepts
+    return create_engine(
+        url, pool_size=pool_size, max_overflow=max_overflow, pool_pre_ping=True
+    )
 
 
-def enrich_resolver(resolver, concepts):
-    resolver.acronym_index = ENGINE.build_acronym_index(concepts)
+def _scalar(raw_conn, sql: str):
+    """Run a single scalar/row query on a raw connection and return the fetched row."""
+    cur = raw_conn.cursor()
+    try:
+        cur.execute(sql)
+        return cur.fetchone()
+    finally:
+        cur.close()
+
+
+def _best_effort_scalar(raw_conn, sql: str):
+    """Like _scalar but returns None instead of raising (for optional OMOP tables)."""
+    try:
+        return _scalar(raw_conn, sql)
+    except Exception:
+        return None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    db_engine = _build_engine(DB_CONFIG)
+    app.state.db_engine = db_engine
+
+    # Dedicated engine for refresh work so it never borrows the live-request pool.
+    refresh_engine = _build_engine(DB_CONFIG, pool_size=1, max_overflow=1)
+    app.state.refresh_engine = refresh_engine
+
+    def fingerprint():
+        """Cheap probe so an unchanged dataset skips the reload. Tracks the DISTINCT
+        concept set (what the in-memory state depends on) — NOT raw row count, which
+        churns with collection/count values that are read live per request anyway. The
+        latest_distributions probe is authoritative (errors force a reload); the OMOP
+        counts are best-effort (qualified names in case OMOP is a separate DB)."""
+        omop_db = OMOP_DB_CONFIG["database"]
+        raw = refresh_engine.raw_connection()
+        try:
+            dist = _scalar(
+                raw,
+                "SELECT COUNT(DISTINCT concept_id), MAX(concept_id) FROM latest_distributions",
+            )
+            syn = _best_effort_scalar(
+                raw, f"SELECT COUNT(*) FROM `{omop_db}`.concept_synonym"
+            )
+            anc = _best_effort_scalar(
+                raw,
+                f"SELECT COUNT(*) FROM `{omop_db}`.concept_ancestor"
+                " WHERE min_levels_of_separation = 1",
+            )
+            return (tuple(dist) if dist else None, syn, anc)
+        finally:
+            raw.close()
+
+    def _timed(name, fn):
+        t0 = time.monotonic()
+        result = fn()
+        log.info(f"[warmup] postprocess.{name}: {time.monotonic() - t0:.2f}s")
+        return result
+
+    def build_core_indexes(store, concepts):
+        # Fast phase: three CPU builds (no DB) concurrently. Flips has_loaded_core +
+        # has_loaded_acronyms so matching goes live before the slow DB loads.
+        p0 = time.monotonic()
+        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="warmup") as ex:
+            f_acr = ex.submit(
+                _timed,
+                "build_acronym_index",
+                lambda: ENGINE.build_acronym_index(concepts),
+            )
+            f_name = ex.submit(
+                _timed,
+                "build_name_token_index",
+                lambda: build_name_token_index(concepts),
+            )
+            f_cbi = ex.submit(
+                _timed, "build_concepts_by_id", lambda: build_concepts_by_id(concepts)
+            )
+
+            store.name_token_index = f_name.result()
+            store.concepts_by_id = f_cbi.result()
+            store.has_loaded_core = True
+
+            store.acronym_index = f_acr.result()
+            store.has_loaded_acronyms = True
+        log.info(f"[warmup] core indexes built in {time.monotonic() - p0:.2f}s")
+
+    def load_enrichment(store, concepts):
+        # Slow phase: two heavy DB loads run sequentially (one query on MySQL at a time), each
+        # flipping its flag as its map lands so synonyms switch on without waiting for ancestors.
+        concept_ids = [c["concept_id"] for c in concepts]
+        p0 = time.monotonic()
+
+        def _load_synonyms():
+            m = load_synonym_map(OMOP_DB_CONFIG, concept_ids)
+            return m, build_synonym_token_index(m)
+
+        store.synonym_map, store.synonym_token_index = _timed(
+            "synonym_map+token_index", _load_synonyms
+        )
+        store.has_loaded_synonyms = True
+
+        store.ancestor_map = _timed(
+            "load_ancestor_map",
+            lambda: load_ancestor_map(OMOP_DB_CONFIG, concept_ids),
+        )
+        store.has_loaded_ancestors = True
+        log.info(f"[warmup] enrichment loaded in {time.monotonic() - p0:.2f}s")
+
+        # asizeof walks the full ~95MB of maps — as costly as the loads — so DEBUG-only.
+        if log.isEnabledFor(logging.DEBUG):
+            total_bytes = sum(
+                asizeof.asizeof(m)
+                for m in (
+                    store.synonym_map,
+                    store.synonym_token_index,
+                    store.acronym_index,
+                    store.name_token_index,
+                    store.ancestor_map,
+                    store.concepts_by_id,
+                )
+            )
+            log.debug(
+                f"[warmup] postprocess: total lookup size {_fmt_bytes(total_bytes)}"
+            )
+
+    # Concepts are loaded at startup for three reasons:
+    #   1. FuzzyConceptResolver — iterates the full list on every resolve (RESOLVER_BACKEND=fuzzy).
+    #   2. synonym_map — built from concept IDs; also used by MySQLConceptResolver at request time.
+    #   3. acronym_index — built from concept names; used by QueryParser for acronym expansion.
+    #   4. concepts_by_id — id -> {name, category}; used to hydrate child concepts (ancestors).
+    # If RESOLVER_BACKEND=sql is permanent and the fuzzy fallback in FallbackResolver is removed,
+    # this load could be replaced by a lighter synonym-only query. Refactor candidate.
+    # Dev-only warm-up snapshot cache: uvicorn --reload restores the tokenised concepts +
+    # synonym/acronym maps from disk instead of re-querying MySQL on every save. Never in prod.
+    cache_path = (
+        os.getenv("CONCEPTS_CACHE_PATH", ".concepts_cache.pkl")
+        if APP_ENV == "local"
+        else None
+    )
     store = ResolverStore(
-        load_concepts_from_mysql,
+        lambda: load_concepts_from_mysql(refresh_engine),
         ttl_seconds=STORE_REFRESH_TTL,
-        postprocess=enrich_resolver,
+        build_core=build_core_indexes,
+        load_enrichment=load_enrichment,
+        cache_path=cache_path,
+        fingerprint=fingerprint,
     )
-    resolver = await store.get_resolver()
     app.state.resolver_store = store
-    print(
-        f"[Start-up] Loaded FuzzyConceptResolver (concepts={len(resolver.concepts)}) from `{VIEW_NAME}`"
+
+    medcat_url = os.getenv("MEDCAT_URL", "").strip()
+    medcat_client = (
+        MedCATClient(
+            url=medcat_url,
+            min_acc=float(os.getenv("MEDCAT_MIN_ACC", "0.5")),
+        )
+        if medcat_url
+        else None
     )
-    yield
+    app.state.medcat_client = medcat_client
+
+    app.state.sql_resolver = MySQLConceptResolver(db_engine, store, medcat_client)
+    app.state.backend = RESOLVER_BACKEND
+
+    # The server starts serving immediately in every environment. The concept/synonym/acronym
+    # warm-up (and subsequent TTL refreshes) run in the background: until it completes, the
+    # resolvers degrade gracefully (LIKE-based SQL search, no synonym boost / acronym expansion)
+    # so requests are never blocked waiting for the load.
+    log.info("[warmup] startup: serving now (reduced mode until warm-up completes)")
+    refresh_task = asyncio.create_task(store.run_periodic_refresh())
+
+    try:
+        yield
+    finally:
+        if refresh_task:
+            refresh_task.cancel()
+        refresh_engine.dispose()
 
 
 def get_resolver_store(request: Request) -> ResolverStore:
@@ -116,6 +259,18 @@ def get_resolver_store(request: Request) -> ResolverStore:
 
 # FastAPI app
 app = FastAPI(title="Project Daphne NLP Service", version="1.0", lifespan=lifespan)
+app.include_router(concepts_router)
+
+
+@app.middleware("http")
+async def log_request_time(request: Request, call_next):
+    t0 = time.monotonic()
+    response = await call_next(request)
+    log.info(
+        f"[Request] {request.method} {request.url.path} {response.status_code} {(time.monotonic() - t0) * 1000:.1f}ms"
+    )
+    return response
+
 
 # Parsing engine
 ENGINE = RuleEngine()
@@ -127,6 +282,11 @@ PARSER = QueryParser(ENGINE)
 # ------------------------------------------------------------
 class QueryRequest(BaseModel):
     query: str
+    use_collection_filter: bool = False
+    collection_ids: Optional[List[int]] = None
+    use_collection_score: bool = True
+    use_synonym_lookup: bool = True
+    use_medcat: bool = True
 
 
 class Entity(BaseModel):
@@ -179,8 +339,9 @@ class AcronymResponse(BaseModel):
 # Endpoints
 # ------------------------------------------------------------
 @app.post("/extract", response_model=QueryResponse)
-async def extract_entities(
+def extract_entities(
     payload: QueryRequest,
+    request: Request,
     threshold: float = Query(
         DEFAULT_THRESHOLD, description="Fuzzy match threshold 0-100"
     ),
@@ -188,17 +349,58 @@ async def extract_entities(
         True, description="Prefer phrase overlap when token matching is available"
     ),
     max_matches: Optional[int] = Query(
-        None, ge=1, description="Max concept matches per entity (defaults to RESOLVER_MAX_MATCHES)"
+        None,
+        ge=1,
+        description="Max concept matches per entity (defaults to RESOLVER_MAX_MATCHES)",
     ),
     store: ResolverStore = Depends(get_resolver_store),
 ):
     """
-    Extract clinical concepts from query using fuzzy matching.
-    """
-    resolver = await store.get_resolver()
-    ret_value = PARSER.extract(payload.query, threshold, phrase_first, resolver, max_matches=max_matches)
+    Extract clinical concepts from query.
+    Set RESOLVER_BACKEND=sql (default) for MySQL+MedCAT lookup,
+    or RESOLVER_BACKEND=fuzzy for in-memory fuzzy matching.
 
-    print(f"[Request] query='{payload.query}' => entities={ret_value}")
+    Sync endpoint (runs in FastAPI's threadpool) so the synchronous DB work never blocks the
+    event loop. Resolver selection is non-blocking: until the background warm-up completes the
+    request is served in reduced mode (LIKE-based SQL search, no synonym/acronym enrichment).
+    """
+    log.debug(
+        f"[/extract] query='{payload.query}' threshold={threshold} "
+        f"phrase_first={phrase_first} backend={RESOLVER_BACKEND}"
+    )
+
+    if not store.has_loaded_core:
+        log.warning("[warmup] /extract in reduced mode (concepts still loading)")
+
+    if RESOLVER_BACKEND == "fuzzy":
+        # Fuzzy quality depends on synonym/acronym enrichment, so use it only once fully warm.
+        resolver = (
+            store.resolver if store.fully_warm else request.app.state.sql_resolver
+        )
+    else:
+        resolver = request.app.state.sql_resolver
+
+    ret_value = PARSER.extract(
+        payload.query,
+        threshold,
+        phrase_first,
+        resolver,
+        max_matches=max_matches,
+        use_collection_filter=payload.use_collection_filter,
+        collection_ids=list(payload.collection_ids) if payload.collection_ids else [],
+        use_collection_score=payload.use_collection_score,
+        use_synonym_lookup=payload.use_synonym_lookup,
+        use_medcat=payload.use_medcat,
+    )
+
+    entities = ret_value.get("entities", [])
+    warnings = ret_value.get("warnings", [])
+    entity_names = [e.get("text", "") for e in entities]
+    log.info(
+        f"[/extract] query='{payload.query}' → {len(entities)} entities: {entity_names}"
+    )
+    if warnings:
+        log.warning(f"[/extract] {len(warnings)} warning(s): {warnings}")
 
     return ret_value
 
@@ -207,6 +409,24 @@ async def extract_entities(
 def root():
     return {
         "message": "Cohort Discovery NLP Service running. POST to /extract with {query: 'your text'}"
+    }
+
+
+@app.get("/health/ready")
+def readiness(response: Response, store: ResolverStore = Depends(get_resolver_store)):
+    # 503 until core (fast matching) is ready, then 200; the body reports each capability so
+    # this doubles as a warm-up dashboard: warming → degraded (core up) → ready (fully warm).
+    core = store.has_loaded_core
+    if not core:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return {
+        "status": "ready" if store.fully_warm else ("degraded" if core else "warming"),
+        "loaded": {
+            "core": store.has_loaded_core,
+            "acronyms": store.has_loaded_acronyms,
+            "synonyms": store.has_loaded_synonyms,
+            "ancestors": store.has_loaded_ancestors,
+        },
     }
 
 
@@ -219,8 +439,7 @@ async def list_acronyms(
     offset: int = Query(0, ge=0, description="Offset into the acronym list"),
     store: ResolverStore = Depends(get_resolver_store),
 ):
-    resolver = await store.get_resolver()
-    acronym_index = getattr(resolver, "acronym_index", {}) or {}
+    acronym_index = getattr(store, "acronym_index", {}) or {}
     entries = []
     for acronym, concepts in acronym_index.items():
         if prefix and not acronym.startswith(prefix.upper()):

@@ -1,0 +1,88 @@
+from unittest.mock import MagicMock, patch
+
+from loaders.ancestors import load_ancestor_map
+
+DB_CONFIG = {"host": "localhost", "user": "u", "password": "p", "database": "omop"}
+
+
+def _mock_conn(table_exists=True, rows=None):
+    """Build a mysql.connector connection mock. conn.cursor() returns the same cursor
+    for both the SHOW TABLES probe and the SELECT (fetchone/fetchall serve each)."""
+    cursor = MagicMock()
+    cursor.fetchone.return_value = ("concept_ancestor",) if table_exists else None
+    cursor.fetchall.return_value = rows or []
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    return conn, cursor
+
+
+def test_empty_ids_returns_empty_without_connecting():
+    with patch("mysql.connector.connect") as connect:
+        assert load_ancestor_map(DB_CONFIG, []) == {}
+        connect.assert_not_called()
+
+
+def test_table_absent_returns_empty():
+    conn, _ = _mock_conn(table_exists=False)
+    with patch("mysql.connector.connect", return_value=conn):
+        assert load_ancestor_map(DB_CONFIG, [1, 2]) == {}
+
+
+def test_row_accumulation_and_dedup():
+    rows = [
+        {"ancestor_concept_id": 1, "descendant_concept_id": 2},
+        {"ancestor_concept_id": 1, "descendant_concept_id": 3},
+        {"ancestor_concept_id": 4, "descendant_concept_id": 5},
+        {"ancestor_concept_id": 1, "descendant_concept_id": 2},  # duplicate edge
+    ]
+    conn, _ = _mock_conn(rows=rows)
+    with patch("mysql.connector.connect", return_value=conn):
+        result = load_ancestor_map(DB_CONFIG, [1, 2, 3, 4, 5])
+    assert result == {1: [2, 3], 4: [5]}
+
+
+def test_bindings_single_sided_parent_and_excludes_self():
+    conn, cursor = _mock_conn(rows=[])
+    with patch("mysql.connector.connect", return_value=conn):
+        load_ancestor_map(DB_CONFIG, [10, 20])
+
+    # The second execute is the SELECT (the first is the SHOW TABLES probe).
+    sql, bindings = cursor.execute.call_args_list[-1][0]
+    # Only the parent side is bound in SQL; the child side is filtered in Python.
+    assert sql.count("IN (") == 1
+    assert "ancestor_concept_id IN (" in sql
+    assert "descendant_concept_id IN (" not in sql
+    assert "ancestor_concept_id != descendant_concept_id" in sql
+    assert "min_levels_of_separation = 1" in sql
+    assert bindings == [10, 20]
+
+
+def test_descendant_not_in_concept_set_is_filtered_out():
+    # Parent 1 has children 2 (in set) and 99 (NOT in set); 99 must be dropped in Python.
+    rows = [
+        {"ancestor_concept_id": 1, "descendant_concept_id": 2},
+        {"ancestor_concept_id": 1, "descendant_concept_id": 99},
+    ]
+    conn, _ = _mock_conn(rows=rows)
+    with patch("mysql.connector.connect", return_value=conn):
+        result = load_ancestor_map(DB_CONFIG, [1, 2])
+    assert result == {1: [2]}
+
+
+def test_ids_are_queried_in_chunks():
+    conn, cursor = _mock_conn(rows=[])
+    with patch("mysql.connector.connect", return_value=conn):
+        load_ancestor_map(DB_CONFIG, list(range(10001)))
+
+    # One SHOW TABLES probe + one SELECT per 10000-id chunk (10001 ids -> 2 chunks).
+    selects = [
+        c for c in cursor.execute.call_args_list if "FROM concept_ancestor" in c[0][0]
+    ]
+    assert len(selects) == 2
+    assert len(selects[0][0][1]) == 10000
+    assert len(selects[1][0][1]) == 1
+
+
+def test_exception_returns_empty():
+    with patch("mysql.connector.connect", side_effect=Exception("boom")):
+        assert load_ancestor_map(DB_CONFIG, [1]) == {}
