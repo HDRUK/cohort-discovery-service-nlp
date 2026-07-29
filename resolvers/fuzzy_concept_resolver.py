@@ -2,6 +2,12 @@ from rapidfuzz import fuzz
 import math
 import os
 import re
+from typing import Dict, List
+
+from logging_config import get_logger
+from resolvers.base_resolver import BaseResolver
+
+log = get_logger()
 
 DOWNSTREAM_TOKENS = {
     "due", "secondary", "complication", "associated",
@@ -47,7 +53,7 @@ def fuzzy_token_overlap(candidate_tokens, concept_tokens, min_score=90):
             matched += 1
     return matched / max(len(candidate_tokens), 1)
 
-class FuzzyConceptResolver:
+class FuzzyConceptResolver(BaseResolver):
     """
     Fuzzy matcher for resolving natural language text to standardised concepts.
     
@@ -71,10 +77,10 @@ class FuzzyConceptResolver:
         Penalty per extra concept token relative to query size (default: 0.3).
         Penalises overly specific concepts; scaled by query length to normalise for longer inputs.
     """
-    def __init__(self, concepts, threshold=70, token_match_ratio=0.3, extra_token_penalty=0.3, phrase_first=True):
+    def __init__(self, concepts, threshold=70, token_match_ratio=0.3, extra_token_penalty=0.3, phrase_first=True, pretokenised=False):
         """
         Initialise resolver with concepts and matching parameters.
-        
+
         Parameters:
         -----------
         concepts : list of dict
@@ -87,7 +93,11 @@ class FuzzyConceptResolver:
             Penalty per extra concept token. Default: 0.3.
         phrase_first : bool, optional
             If True, prefer phrase overlap for token ratio when available.
+        pretokenised : bool, optional
+            If True, the concepts already carry 'tokens'/'phrase_tokens' (e.g. restored
+            from the dev snapshot cache) so the tokenise pass is skipped. Default: False.
         """
+        super().__init__()
         self.threshold = threshold
         self.token_match_ratio = token_match_ratio
         self.extra_token_penalty = extra_token_penalty
@@ -106,37 +116,52 @@ class FuzzyConceptResolver:
                 if parsed_max > 0:
                     self.max_matches = parsed_max
             except ValueError:
-                print(f"[FuzzyConceptResolver] Invalid RESOLVER_MAX_MATCHES='{raw_max_matches}', ignoring.")
+                log.warning(f"[FuzzyConceptResolver] Invalid RESOLVER_MAX_MATCHES='{raw_max_matches}', ignoring.")
 
-        # Pre-tokenise each concept's name first, description second
+        # Pre-tokenise each concept's name first, description second.
+        # Skipped when concepts were restored pre-tokenised from the snapshot cache.
+        if not pretokenised:
+            self._tokenise_concepts()
+
+    def _tokenise_concepts(self):
         for c in self.concepts:
             unigrams, phrases = tokenise(c.get("concept_name") or c.get("description") or "")
             c["tokens"] = unigrams
             c["phrase_tokens"] = phrases
 
-    def resolve(self, text, threshold=None, phrase_first=None, max_matches=None):
+    def search(self, *, concept_names=None, threshold=None, phrase_first=True, per_page=None, **ignored):
         """
-        Fuzzy match input text against concepts and return ranked matches.
-        
-        Parameters:
-        -----------
-        text : str
-            The input text to resolve against the concept list.
-            Tokenised internally to extract key terms for matching.
-        threshold : float, optional
-            Minimum fuzzy similarity score (0-100) to consider a match.
-            If None, defaults to the instance-level threshold set during initialization.
-            Controls how strict the matching criteria are; lower values increase recall but decrease precision.
-        phrase_first : bool, optional
-            If True, prefer phrase overlap for token ratio when available.
-            Defaults to the instance-level setting.
-        
-        Returns:
-        --------
-        list of dict
-            Ranked list of matching concepts sorted by match_score (descending).
-            Each concept dict includes all original fields plus a 'match_score' field.
-            The score is adjusted by:
+        Fuzzy-match one or more terms against the concept list.
+
+        Runs the matching engine per term, merges results by concept_id (keeping the
+        highest match_score), sorts descending and truncates to per_page.
+
+        Returns {"total": int, "data": [rows]} — the same shape as
+        MySQLConceptResolver.search(). Each row carries the full concept dict plus the
+        canonical keys (name, category, match_score, collection_score) so it can be
+        consumed identically by /concepts/search and the /extract pipeline.
+        Args that don't apply to in-memory matching (concept_ids, domain, collection
+        filters, ancestors) are accepted and ignored via **ignored.
+        """
+        merged: Dict[int, dict] = {}
+        for term in concept_names or []:
+            for row in self._match(term, threshold=threshold, phrase_first=phrase_first):
+                cid = row["concept_id"]
+                if cid not in merged or row["match_score"] > merged[cid]["match_score"]:
+                    merged[cid] = row
+        rows = sorted(merged.values(), key=lambda r: r["match_score"], reverse=True)
+        limit = per_page if per_page is not None else self.max_matches
+        if limit:
+            rows = rows[:limit]
+        return {"total": len(rows), "data": rows}
+
+    def _match(self, text, threshold=None, phrase_first=None):
+        """
+        Fuzzy match a single input text against concepts and return ranked matches.
+
+        Returns a list of dicts sorted by match_score descending. Each dict is the
+        original concept dict plus a 'match_score' field and canonical name/category/
+        collection_score keys. The score is adjusted by:
             - Token overlap ratio: requires significant overlap of tokens between input and concept
             - Extra token penalty: penalises concepts with many irrelevant tokens relative to query size
             - Downstream token penalty: penalises presence of complication/secondary language
@@ -156,7 +181,7 @@ class FuzzyConceptResolver:
         logged = 0
 
         if self.log_matches:
-            print(
+            log.debug(
                 f"Resolving candidate '{text}' against {len(self.concepts)} concepts "
                 f"(log limit={self.log_match_limit})"
             )
@@ -200,7 +225,7 @@ class FuzzyConceptResolver:
                 token_ok = token_ratio >= self.token_match_ratio
                 raw_ok = raw_score >= threshold
                 score_ok = score >= threshold and token_ok and raw_ok
-                print(
+                log.debug(
                     f"Checking candidate '{text}' vs concept_id={concept.get('concept_id')}, "
                     f"concept_name='{concept_text}', token_ratio={token_ratio:.3f}, "
                     f"raw_score={raw_score:.2f}, final_score={score:.2f}, "
@@ -261,13 +286,16 @@ class FuzzyConceptResolver:
             if score >= threshold:
                 result = dict(concept)
                 result["match_score"] = score
+                result["name"] = concept.get("concept_name") or concept.get("description") or ""
+                result["category"] = concept.get("domain_id") or ""
+                result.setdefault("collection_score", 0)
+                result.setdefault("ncollections", 0)
+                result.setdefault("count", None)
+                result.setdefault("children", [])
                 results.append(result)
 
         # Sort by score descending
         results.sort(key=lambda x: x["match_score"], reverse=True)
-        effective_max = max_matches if max_matches is not None else self.max_matches
-        if effective_max:
-            results = results[:effective_max]
         if self.log_matches and logged >= self.log_match_limit:
-            print(f"Resolver concept logging truncated at {self.log_match_limit} concepts")
+            log.info(f"Resolver concept logging truncated at {self.log_match_limit} concepts")
         return results

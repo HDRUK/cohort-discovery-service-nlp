@@ -1,13 +1,21 @@
 from fastapi.testclient import TestClient
 
 from app import app
-from fuzzy_concept_resolver import FuzzyConceptResolver
+from resolvers import FuzzyConceptResolver
 from rules_engine import RuleEngine
 
 
 class LocalResolverStore:
-    def __init__(self, resolver):
+    def __init__(self, resolver, acronym_index=None):
         self._resolver = resolver
+        self.synonym_map = {}
+        self.acronym_index = acronym_index or {}
+        self.resolver = resolver
+        self.has_loaded_core = True
+        self.has_loaded_acronyms = True
+        self.has_loaded_synonyms = True
+        self.has_loaded_ancestors = True
+        self.fully_warm = True
 
     async def get_resolver(self):
         return self._resolver
@@ -38,9 +46,9 @@ def seed_acronym_resolver():
             "description": "Atrial fibrillation",
         },
     ]
-    resolver = FuzzyConceptResolver(concepts)
-    resolver.acronym_index = RuleEngine().build_acronym_index(concepts)
-    return LocalResolverStore(resolver)
+    acronym_index = RuleEngine().build_acronym_index(concepts)
+    store = LocalResolverStore(FuzzyConceptResolver(concepts), acronym_index=acronym_index)
+    return store
 
 
 def test_acronyms_endpoint_returns_items():
