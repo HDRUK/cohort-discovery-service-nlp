@@ -1,3 +1,16 @@
+## [1.8.0](https://github.com/HDRUK/cohort-discovery-service-nlp/compare/v1.7.0...v1.8.0) (2026-07-29)
+
+### ✨ Features
+
+* **DP-928:** Moving API functionality for concept search (#87) ([f75df3e](https://github.com/HDRUK/cohort-discovery-service-nlp/commit/f75df3e2a54dba7d3d2caa3e2c6f5d08d9890f84)), closes [DP-928](undefinedDP-928)
+* **DP-929:** Further optimisation of loading data and defining a 'warm' state (#94) ([77a1341](https://github.com/HDRUK/cohort-discovery-service-nlp/commit/77a134143e78baa2961fdc13b328481a364ade73)), closes [DP-929](undefinedDP-929)
+* **DP-929:** Implementing a synonym lookup using the OMOP tables (#89) ([981e794](https://github.com/HDRUK/cohort-discovery-service-nlp/commit/981e794ae9612b9ecb4f4b636ead6acb589d837b)), closes [DP-929](undefinedDP-929)
+
+### 🐛 Bug Fixes
+
+* **DP-932:** updated dev deployment pipeline for standalone so it can run on manua… (#91) ([47be94f](https://github.com/HDRUK/cohort-discovery-service-nlp/commit/47be94fcbc883f7f9f597c7331b37591e43feb92)), closes [DP-932](undefinedDP-932)
+* **DP-932:** updated dev pipeline to run standalone when tag has been added (#93) ([4474e4e](https://github.com/HDRUK/cohort-discovery-service-nlp/commit/4474e4eee29855436c674b5fc9e3f2c167a76663)), closes [DP-932](undefinedDP-932)
+
 ## [1.7.0](https://github.com/HDRUK/cohort-discovery-service-nlp/compare/v1.6.0...v1.7.0) (2026-05-21)
 
 ### ✨ Features
