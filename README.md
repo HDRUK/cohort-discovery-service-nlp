@@ -23,19 +23,15 @@ git clone <your-repo-url>
 cd <repo-dir>
 ```
 
-2. Create a Python virtual environment
+2. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you don't already have it.
+
+3. Install dependencies (this also creates a `.venv` for you)
 
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+uv sync
 ```
 
-3. Install dependencies
-
-```bash
-pip install pip --upgrade
-pip install -r requirements.txt
-```
+Run commands inside the environment with `uv run <command>` (e.g. `uv run pytest -q`), or activate it directly with `source .venv/bin/activate`.
 
 4. Setup `.env`
 
