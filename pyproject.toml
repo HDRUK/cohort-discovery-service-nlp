@@ -1,0 +1,26 @@
+[project]
+name = "cohort-nlp"
+version = "1.8.0"
+description = "Cohort discovery NLP service"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "fastapi==0.111.1",
+    "uvicorn[standard]==0.23.2",
+    "pydantic>=2.5.0",
+    "mysql-connector-python",
+    "sqlalchemy>=2.0",
+    "python-dotenv",
+    "rapidfuzz==3.5.2",
+    "word2number",
+    "httpx",
+    "pympler",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[tool.uv]
+package = false
+exclude-newer = "7 days"
