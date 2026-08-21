@@ -1,3 +1,9 @@
+## [1.8.1](https://github.com/HDRUK/cohort-discovery-service-nlp/compare/v1.8.0...v1.8.1) (2026-08-21)
+
+### 🐛 Bug Fixes
+
+* **DP-974:** Missing default query parameters (#96) ([1e734dc](https://github.com/HDRUK/cohort-discovery-service-nlp/commit/1e734dcf3861395c276bba54826acabc72c6265c)), closes [DP-974](undefinedDP-974)
+
 ## [1.8.0](https://github.com/HDRUK/cohort-discovery-service-nlp/compare/v1.7.0...v1.8.0) (2026-07-29)
 
 ### ✨ Features
