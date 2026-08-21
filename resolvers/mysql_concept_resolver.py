@@ -54,6 +54,8 @@ class MySQLConceptResolver(BaseResolver):
         """
         concept_ids = concept_ids or []
         concept_names = concept_names or []
+        if per_page is None:
+            per_page = 25
 
         # Gate each capability on its own warm-up flag (snapshotted into locals to avoid a
         # mid-request flip). collection-score + medcat need `core` (the fast candidate path);
