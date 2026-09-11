@@ -403,9 +403,6 @@ def extract_entities(
     if warnings:
         log.warning(f"[/extract] {len(warnings)} warning(s): {warnings}")
 
-    log.info(f"ret_value: {ret_value}")
-    log.info(f"death constraints: {ret_value.get('death_constraints')}")
-
     return ret_value
 
 
