@@ -202,9 +202,9 @@ class QueryParser:
                     all_warnings.extend(seg_result["warnings"])
                     all_age_constraints.extend(seg_result.get("age_constraints", []))
                     all_time_constraints.extend(seg_result.get("time_constraints", []))
-                    all_death_constraints.extend(
-                        seg_result.get("death_constraints", [])
-                    )
+                    # all_death_constraints.extend(
+                    #     seg_result.get("death_constraints", [])
+                    # )
                     root_groups.append(
                         {
                             "entities": seg_result["entities"],
@@ -215,9 +215,9 @@ class QueryParser:
                             "time_constraints": list(
                                 seg_result.get("time_constraints", [])
                             ),
-                            "death_constraints": list(
-                                seg_result.get("death_constraints", None)
-                            ),
+                            # "death_constraints": list(
+                            #     seg_result.get("death_constraints", None)
+                            # ),
                         }
                     )
 
@@ -238,14 +238,14 @@ class QueryParser:
                         if not rg["time_constraints"]:
                             rg["time_constraints"] = list(shared_time)
 
-                groups_with_death = [
-                    rg for rg in root_groups if rg["death_constraints"]
-                ]
-                if len(groups_with_death) == 1:
-                    shared_death = groups_with_death[0]["death_constraints"]
-                    for rg in root_groups:
-                        if not rg["death_constraints"]:
-                            rg["death_constraints"] = list(shared_death)
+                # groups_with_death = [
+                #     rg for rg in root_groups if rg["death_constraints"]
+                # ]
+                # if len(groups_with_death) == 1:
+                #     shared_death = groups_with_death[0]["death_constraints"]
+                #     for rg in root_groups:
+                #         if not rg["death_constraints"]:
+                #             rg["death_constraints"] = list(shared_death)
 
                 return {
                     "entities": all_entities,
