@@ -34,6 +34,68 @@ app.state.resolver_store = LocalResolverStore(FuzzyConceptResolver(concepts))
 client = TestClient(app)
 
 
+def test_people_with_death_record_with_type2_diabetes():
+    response = client.post(
+        "/extract?threshold=70",
+        json={"query": "People who died with Type 2 diabetes"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+
+    assert "entities" in body
+    assert len(body["entities"]) >= 1
+
+    # entity = body["entities"][0]
+    entity = next(
+        (e for e in body["entities"] if e["attributes"].get("description")),
+        body["entities"][0],
+    )
+
+    # Concept
+    concept = entity["attributes"].get("description")
+    if concept:
+        assert "type 2 diabetes mellitus" in concept.lower()
+
+    # Negation
+    negated = entity.get("negated", False)
+    assert negated is False
+
+    # Death
+    assert body.get("death_constraints") == 1
+
+
+def test_people_with_no_death_record_with_type2_diabetes():
+    response = client.post(
+        "/extract?threshold=70",
+        json={"query": "People who are alive with Type 2 diabetes"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+
+    assert "entities" in body
+    assert len(body["entities"]) >= 1
+
+    # entity = body["entities"][0]
+    entity = next(
+        (e for e in body["entities"] if e["attributes"].get("description")),
+        body["entities"][0],
+    )
+
+    # Concept
+    concept = entity["attributes"].get("description")
+    if concept:
+        assert "type 2 diabetes mellitus" in concept.lower()
+
+    # Negation
+    negated = entity.get("negated", False)
+    assert negated is False
+
+    # Death
+    assert body.get("death_constraints") == 0
+
+
 def has_age_constraint(body, min_age, max_age, inclusive, scope=None):
     constraints = list(body.get("age_constraints", []))
     for entity in body.get("entities", []):
@@ -79,6 +141,9 @@ def test_adults_type2_diabetes_last_2_years():
 
     # Age
     assert has_age_constraint(body, 24, None, False)
+
+    # Death should be empty
+    assert body.get("death_constraints") is None
 
 
 def test_fuzzy_token_overlap_handles_simple_misspelling(monkeypatch):
