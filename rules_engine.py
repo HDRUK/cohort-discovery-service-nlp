@@ -85,6 +85,10 @@ def load_rules() -> Dict[str, Any]:
             (re.compile(entry["pattern"], re.IGNORECASE), entry["op"])
             for entry in data.get("age_patterns", [])
         ],
+        "death_patterns": [
+            (re.compile(entry["pattern"], re.IGNORECASE), entry["op"])
+            for entry in data.get("death_patterns", [])
+        ],
         "age_overrides": [
             {
                 "pattern": re.compile(entry["pattern"], re.IGNORECASE),
@@ -126,6 +130,7 @@ class RuleEngine:
         self.splitters = self.rules["splitters"]
         self.leading_verbs = self.rules["leading_verbs"]
         self.age_patterns = self.rules["age_patterns"]
+        self.death_patterns = self.rules["death_patterns"]
         self.age_overrides = self.rules["age_overrides"]
         self.time_patterns = self.rules["time_patterns"]
         self.demographic_age_defaults = self.rules["demographic_age_defaults"]
@@ -259,6 +264,21 @@ class RuleEngine:
                             "scope": scope,
                         }
                     )
+
+            cleaned = pattern.sub("", cleaned)
+
+        return constraints, cleaned.strip()
+
+    def extract_death_constraints(self, text: str) -> Tuple[int | None, str]:
+        constraints = None
+        cleaned = text
+
+        for pattern, op in self.death_patterns:
+            for m in pattern.finditer(cleaned):
+                if op == "=":
+                    constraints = 1
+                elif op == "!=":
+                    constraints = 0
 
             cleaned = pattern.sub("", cleaned)
 

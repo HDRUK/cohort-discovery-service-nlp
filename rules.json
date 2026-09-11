@@ -50,6 +50,16 @@
     "^have\\s+",
     "^have\\s+been\\s+"
   ],
+  "death_patterns": [
+    {
+      "pattern": "(dead|death|died|deceased)",
+      "op": "="
+    },
+    {
+      "pattern": "alive",
+      "op": "!="
+    }
+  ],
   "age_patterns": [
     {
       "pattern": "aged\\s+over\\s+(\\d+)",
