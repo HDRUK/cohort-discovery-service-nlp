@@ -298,7 +298,6 @@ class QueryParser:
         query_death_constraints = global_death_constraints
         entity_age_constraints_all: List[Dict[str, Any]] = []
         entity_time_constraints_all: List[Dict[str, Any]] = []
-        entity_death_constraints_all: int | None = None
         has_event_candidate = False
 
         # Pre-pass: detect whether any candidate includes non-demographic content
@@ -500,8 +499,6 @@ class QueryParser:
                     global_time_constraints, candidate_time_constraints
                 )
 
-            entity_death_constraints = global_death_constraints
-
             entity_age_constraints = [
                 constraint
                 for constraint in entity_age_constraints
@@ -552,8 +549,8 @@ class QueryParser:
                         "time_constraints": entity_time_constraints
                         if entity_time_constraints is not None
                         else [],
-                        "death_constraints": entity_death_constraints
-                        if entity_death_constraints is not None
+                        "death_constraints": global_death_constraints
+                        if global_death_constraints is not None
                         else None,
                         "attributes": {
                             "concept_id": None,
@@ -610,8 +607,8 @@ class QueryParser:
                         "time_constraints": entity_time_constraints
                         if entity_time_constraints is not None
                         else [],
-                        "death_constraints": entity_death_constraints
-                        if entity_death_constraints is not None
+                        "death_constraints": global_death_constraints
+                        if global_death_constraints is not None
                         else None,
                         "attributes": attributes,
                     }
