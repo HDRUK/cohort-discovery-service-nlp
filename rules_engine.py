@@ -272,15 +272,23 @@ class RuleEngine:
     def extract_death_constraints(self, text: str) -> Tuple[int | None, str]:
         constraints = None
         cleaned = text
+        matches = 0
 
         for pattern, op in self.death_patterns:
             for m in pattern.finditer(cleaned):
+                matches += 1
+
                 if op == "=":
                     constraints = 1
                 elif op == "!=":
                     constraints = 0
 
             cleaned = pattern.sub("", cleaned)
+
+        # If multiple death terms are found (which can be contradictory/ambigious)
+        # set constraints to None, and a warning will be shown on the frontend
+        if matches > 1:
+            constraints = None
 
         return constraints, cleaned.strip()
 
