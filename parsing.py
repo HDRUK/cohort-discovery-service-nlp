@@ -173,8 +173,6 @@ class QueryParser:
         paren_warnings: List[str] = []
         working_query = query
 
-        log.info("Query: " + query)
-
         if not _skip_paren:
             or_segments = self._split_top_level_or(query)
             if or_segments:
