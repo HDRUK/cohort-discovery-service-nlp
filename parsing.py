@@ -147,8 +147,6 @@ class QueryParser:
         candidate_without_death = self.engine.strip_demographic_age_prefix(
             candidate_without_death
         )
-        ### I realized that these feed onto each other and each pass
-        ### removes certain keywords
 
         candidate_clean = self.engine.clean_candidates(candidate_without_death)
         candidate_clean = self.engine.strip_dangling_logical_operators(candidate_clean)
@@ -202,9 +200,6 @@ class QueryParser:
                     all_warnings.extend(seg_result["warnings"])
                     all_age_constraints.extend(seg_result.get("age_constraints", []))
                     all_time_constraints.extend(seg_result.get("time_constraints", []))
-                    # all_death_constraints.extend(
-                    #     seg_result.get("death_constraints", [])
-                    # )
                     root_groups.append(
                         {
                             "entities": seg_result["entities"],
@@ -215,9 +210,6 @@ class QueryParser:
                             "time_constraints": list(
                                 seg_result.get("time_constraints", [])
                             ),
-                            # "death_constraints": list(
-                            #     seg_result.get("death_constraints", None)
-                            # ),
                         }
                     )
 
@@ -237,15 +229,6 @@ class QueryParser:
                     for rg in root_groups:
                         if not rg["time_constraints"]:
                             rg["time_constraints"] = list(shared_time)
-
-                # groups_with_death = [
-                #     rg for rg in root_groups if rg["death_constraints"]
-                # ]
-                # if len(groups_with_death) == 1:
-                #     shared_death = groups_with_death[0]["death_constraints"]
-                #     for rg in root_groups:
-                #         if not rg["death_constraints"]:
-                #             rg["death_constraints"] = list(shared_death)
 
                 return {
                     "entities": all_entities,
@@ -435,22 +418,6 @@ class QueryParser:
                     entity_time_constraints_all, candidate_time_constraints
                 )
 
-            ### Set query scope; not needed for death (?)
-
-            # if (
-            #     candidate_death_constraints
-            #     and demographic_only_for_scope
-            #     or not has_event_candidate
-            # ):
-            #     for constraint in candidate_death_constraints:
-            #         constraint["scope"] = "query"
-            # query_death_constraints = self.engine.merge_death_constraints(
-            #     query_death_constraints, candidate_death_constraints
-            # )
-            # entity_death_constraints_all = self.engine.merge_death_constraints(
-            #     entity_death_constraints_all, candidate_death_constraints
-            # )
-
         # Pre-fetch: resolve candidates concurrently so a multi-term query's wall-time
         # approaches the slowest single candidate rather than the sum. Only the SQL is
         # parallelised here; the main loop below still assembles results sequentially so
@@ -533,18 +500,7 @@ class QueryParser:
                     global_time_constraints, candidate_time_constraints
                 )
 
-            ### will always be false I think..
-            if entity_death_constraints_all:
-                entity_death_constraints = entity_death_constraints_all
-            ### just set it to global_death_constraints
-            ### since there shouldn't be any candidates as "death" is always either 0,1,None (?)
-            else:
-                entity_death_constraints = global_death_constraints
-            ### original copy:
-            # else:
-            #     entity_death_constraints = self.engine.merge_death_constraints(
-            #         global_death_constraints, candidate_death_constraints
-            #     )
+            entity_death_constraints = global_death_constraints
 
             entity_age_constraints = [
                 constraint
@@ -556,14 +512,6 @@ class QueryParser:
                 for constraint in entity_time_constraints
                 if constraint.get("scope") != "query"
             ]
-
-            ### don't think this is needed as "death" doesn't have "scope"
-            ### a.k.a its scope always should be global (?)
-            # entity_death_constraints = [
-            #     constraint
-            #     for constraint in entity_death_constraints
-            #     if constraint.get("scope") != "query"
-            # ]
 
             # Unsupported concepts
             unsupported = self.engine.find_unsupported_features(candidate)
