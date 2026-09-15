@@ -141,10 +141,14 @@ class QueryParser:
         _, candidate_without_time = self.engine.extract_time_constraints(
             candidate_without_age, "entity"
         )
-        candidate_without_time = self.engine.strip_demographic_age_prefix(
+        _, candidate_without_death = self.engine.extract_death_constraints(
             candidate_without_time
         )
-        candidate_clean = self.engine.clean_candidates(candidate_without_time)
+        candidate_without_death = self.engine.strip_demographic_age_prefix(
+            candidate_without_death
+        )
+
+        candidate_clean = self.engine.clean_candidates(candidate_without_death)
         candidate_clean = self.engine.strip_dangling_logical_operators(candidate_clean)
         candidate_clean = self.engine.strip_leading_verbs(candidate_clean)
         candidate_clean = self.engine.strip_dangling_logical_operators(candidate_clean)
@@ -178,20 +182,34 @@ class QueryParser:
                 all_warnings: List[str] = []
                 all_age_constraints: List[Dict[str, Any]] = []
                 all_time_constraints: List[Dict[str, Any]] = []
+                all_death_constraints: int | None = None
 
                 for segment in or_segments:
-                    seg_result = self.extract(segment, threshold, phrase_first, resolver, max_matches=max_matches, **resolve_kwargs)
+                    seg_result = self.extract(
+                        segment,
+                        threshold,
+                        phrase_first,
+                        resolver,
+                        max_matches=max_matches,
+                        **resolve_kwargs,
+                    )
                     all_entities.extend(seg_result["entities"])
                     all_groups.extend(seg_result.get("groups", []))
                     all_warnings.extend(seg_result["warnings"])
                     all_age_constraints.extend(seg_result.get("age_constraints", []))
                     all_time_constraints.extend(seg_result.get("time_constraints", []))
-                    root_groups.append({
-                        "entities": seg_result["entities"],
-                        "groups": seg_result.get("groups", []),
-                        "age_constraints": list(seg_result.get("age_constraints", [])),
-                        "time_constraints": list(seg_result.get("time_constraints", [])),
-                    })
+                    root_groups.append(
+                        {
+                            "entities": seg_result["entities"],
+                            "groups": seg_result.get("groups", []),
+                            "age_constraints": list(
+                                seg_result.get("age_constraints", [])
+                            ),
+                            "time_constraints": list(
+                                seg_result.get("time_constraints", [])
+                            ),
+                        }
+                    )
 
                 # If exactly one root group carries age/time constraints, treat
                 # them as shared across all groups — e.g. "adults with cancer or
@@ -218,6 +236,7 @@ class QueryParser:
                     "warnings": list(dict.fromkeys(all_warnings)),
                     "age_constraints": all_age_constraints,
                     "time_constraints": all_time_constraints,
+                    "death_constraints": all_death_constraints,
                 }
 
             raw_groups, paren_warnings = self._validate_paren_groups(query)
@@ -231,7 +250,13 @@ class QueryParser:
                             "All operators within a group must be the same"
                         )
                     group_result = self.extract(
-                        inner_text, threshold, phrase_first, resolver, _skip_paren=True, max_matches=max_matches, **resolve_kwargs
+                        inner_text,
+                        threshold,
+                        phrase_first,
+                        resolver,
+                        _skip_paren=True,
+                        max_matches=max_matches,
+                        **resolve_kwargs,
                     )
                     paren_groups.append(
                         {
@@ -240,6 +265,7 @@ class QueryParser:
                             "entities": group_result["entities"],
                             "age_constraints": group_result["age_constraints"],
                             "time_constraints": group_result["time_constraints"],
+                            "death_constraints": group_result["death_constraints"],
                         }
                     )
                 # Strip parenthesised segments from the outer query (right-to-left to preserve indices)
@@ -262,8 +288,12 @@ class QueryParser:
         global_time_constraints, _ = self.engine.extract_time_constraints(
             working_query, "query"
         )
+        global_death_constraints, _ = self.engine.extract_death_constraints(
+            working_query
+        )
         query_age_constraints = list(global_age_constraints)
         query_time_constraints = list(global_time_constraints)
+        query_death_constraints = global_death_constraints
         entity_age_constraints_all: List[Dict[str, Any]] = []
         entity_time_constraints_all: List[Dict[str, Any]] = []
         has_event_candidate = False
@@ -277,8 +307,13 @@ class QueryParser:
             candidate_time_constraints, candidate_without_time = (
                 self.engine.extract_time_constraints(candidate_without_age, "entity")
             )
-            candidate_without_time = self.engine.strip_demographic_age_prefix(candidate_without_time)
-            candidate_clean = self.engine.clean_candidates(candidate_without_time)
+            candidate_death_constraints, candidate_without_death = (
+                self.engine.extract_death_constraints(candidate_without_time)
+            )
+            candidate_without_death = self.engine.strip_demographic_age_prefix(
+                candidate_without_death
+            )
+            candidate_clean = self.engine.clean_candidates(candidate_without_death)
             candidate_clean = self.engine.strip_dangling_logical_operators(
                 candidate_clean
             )
@@ -308,8 +343,13 @@ class QueryParser:
             candidate_time_constraints, candidate_without_time = (
                 self.engine.extract_time_constraints(candidate_without_age, "entity")
             )
-            candidate_without_time = self.engine.strip_demographic_age_prefix(candidate_without_time)
-            candidate_clean = self.engine.clean_candidates(candidate_without_time)
+            candidate_death_constraints, candidate_without_death = (
+                self.engine.extract_death_constraints(candidate_without_time)
+            )
+            candidate_without_death = self.engine.strip_demographic_age_prefix(
+                candidate_without_death
+            )
+            candidate_clean = self.engine.clean_candidates(candidate_without_death)
             candidate_clean = self.engine.strip_dangling_logical_operators(
                 candidate_clean
             )
@@ -383,7 +423,9 @@ class QueryParser:
         # that reaches resolver.search() below has a precomputed result.
         resolvable: List[Tuple[int, str]] = []
         for idx, candidate in enumerate(candidates):
-            _, candidate_normalised = self._normalise_for_search(candidate, resolver, [])
+            _, candidate_normalised = self._normalise_for_search(
+                candidate, resolver, []
+            )
             if not self.engine.has_non_demographic_content(
                 candidate_normalised
             ) and not self.engine.has_demographic_concept(candidate_normalised):
@@ -392,6 +434,7 @@ class QueryParser:
 
         search_results: Dict[int, Dict[str, Any]] = {}
         if resolvable:
+
             def _run_search(item: Tuple[int, str]) -> Tuple[int, Dict[str, Any]]:
                 item_idx, normalised = item
                 return item_idx, resolver.search(
@@ -504,6 +547,9 @@ class QueryParser:
                         "time_constraints": entity_time_constraints
                         if entity_time_constraints is not None
                         else [],
+                        "death_constraints": global_death_constraints
+                        if global_death_constraints is not None
+                        else None,
                         "attributes": {
                             "concept_id": None,
                             "concept_name": unmatched_text,
@@ -537,8 +583,12 @@ class QueryParser:
 
                 # Map the canonical search row to the /extract attribute shape.
                 attributes = {**match}
-                attributes["concept_name"] = match.get("concept_name") or match.get("name")
-                attributes["domain_id"] = match.get("domain_id") or match.get("category")
+                attributes["concept_name"] = match.get("concept_name") or match.get(
+                    "name"
+                )
+                attributes["domain_id"] = match.get("domain_id") or match.get(
+                    "category"
+                )
                 for k in ("name", "category", "cnt"):
                     attributes.pop(k, None)
 
@@ -555,6 +605,9 @@ class QueryParser:
                         "time_constraints": entity_time_constraints
                         if entity_time_constraints is not None
                         else [],
+                        "death_constraints": global_death_constraints
+                        if global_death_constraints is not None
+                        else None,
                         "attributes": attributes,
                     }
                 )
@@ -565,4 +618,5 @@ class QueryParser:
             "warnings": warnings,
             "age_constraints": query_age_constraints,
             "time_constraints": query_time_constraints,
+            "death_constraints": query_death_constraints,
         }
