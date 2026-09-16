@@ -323,6 +323,7 @@ class QueryResponse(BaseModel):
     warnings: List[str] = []
     age_constraints: List[Dict[str, Any]] = []
     time_constraints: List[Dict[str, Any]] = []
+    death_constraints: int | None = None
 
 
 class AcronymEntry(BaseModel):

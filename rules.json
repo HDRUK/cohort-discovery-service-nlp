@@ -50,6 +50,25 @@
     "^have\\s+",
     "^have\\s+been\\s+"
   ],
+  "death_patterns": [
+    { "pattern": "\\bnot\\s+deceased\\b", "op": "!=" },
+    { "pattern": "\\bno\\s+(?:recorded\\s+)?death(?:s)?\\b", "op": "!=" },
+    { "pattern": "\\bdid\\s+not\\s+die\\b", "op": "!=" },
+    { "pattern": "\\bstill\\s+alive\\b", "op": "!=" },
+    { "pattern": "\\balive\\b", "op": "!=" },
+
+    { "pattern": "\\bnon[-\\s]?survivors?\\b", "op": "=" },
+    { "pattern": "\\bpassed\\s+away\\b", "op": "=" },
+    { "pattern": "\\bdate\\s+of\\s+death\\b", "op": "=" },
+    { "pattern": "\\bdeath\\s+recorded\\b", "op": "=" },
+    { "pattern": "\\ball[-\\s]cause\\s+mortality\\b", "op": "=" },
+    { "pattern": "\\b(?:30|90)[-\\s]day\\s+mortality\\b", "op": "=" },
+    { "pattern": "\\bin[-\\s]hospital\\s+(?:death|mortality)\\b", "op": "=" },
+    {
+      "pattern": "\\b(dead|death|deaths|died|dying|deceased|mortality)\\b",
+      "op": "="
+    }
+  ],
   "age_patterns": [
     {
       "pattern": "aged\\s+over\\s+(\\d+)",
