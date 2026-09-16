@@ -1,3 +1,9 @@
+## [1.9.0](https://github.com/HDRUK/cohort-discovery-service-nlp/compare/v1.8.1...v1.9.0) (2026-09-16)
+
+### ✨ Features
+
+* **DP-894:** extract death demographics from query (#103) ([014bc99](https://github.com/HDRUK/cohort-discovery-service-nlp/commit/014bc9990e3276e9ad58477de7f16ecba14c31d9)), closes [DP-894](undefinedDP-894)
+
 ## [1.8.1](https://github.com/HDRUK/cohort-discovery-service-nlp/compare/v1.8.0...v1.8.1) (2026-08-21)
 
 ### 🐛 Bug Fixes
