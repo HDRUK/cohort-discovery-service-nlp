@@ -312,6 +312,20 @@ python notebooks/model_manager.py use qwen3:8b  # evict the rest, preload this o
 python notebooks/model_manager.py unload        # free everything
 ```
 
+From a notebook, to switch between models:
+
+```python
+from model_manager import use, model, will_fit
+
+use("qwen3:8b")          # evict everything else, preload this one
+will_fit("phi4")         # (False, "needs about 11.5 GB; only 11.0 GB is reachable")
+
+with model("phi4"):      # resident only for the block
+    ...
+```
+
+`use()` raises `MemoryError` rather than loading when a model will not fit. The estimate is deliberately pessimistic: a loaded model costs more than its file, because context and KV cache add a roughly fixed couple of GB — a 0.5 GB model measured 2.75 GB resident — so scaling by file size alone under-predicts badly at the small end. Pass `force=True` to override.
+
 Generation slows by roughly 3x once the machine is swapping, so a benchmark run taken under pressure is not comparable with one taken without it. `status()` reports swap so you can tell the difference.
 
 ### Configuration

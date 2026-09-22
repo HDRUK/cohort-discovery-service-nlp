@@ -6,12 +6,19 @@ Usable from a notebook (`from model_manager import use, status`) or the shell
 
 import json
 import subprocess
+import time
 import sys
 import urllib.request
 
 OLLAMA_URL = "http://localhost:11434"
-LOAD_OVERHEAD = 1.15
 SWAP_WARN_FRACTION = 0.80
+
+# A loaded model costs more than its file: context and KV cache add a roughly fixed
+# amount on top. Measured on this setup: 0.52 GB on disk -> 2.75 GB resident,
+# 2.1 -> 3.7, 5.2 -> 5.5. Proportional scaling badly under-predicts the small end,
+# so estimate with a constant term and round up rather than down.
+LOAD_OVERHEAD_GB = 2.0
+LOAD_SCALE = 1.05
 
 
 def _api(path):
@@ -90,7 +97,7 @@ def will_fit(name):
     if name not in sizes:
         return False, f"{name} is not pulled. Run: ollama pull {name}"
 
-    needed = sizes[name] * LOAD_OVERHEAD
+    needed = sizes[name] * LOAD_SCALE + LOAD_OVERHEAD_GB
     resident = loaded()
     if name in resident:
         return True, f"{name} is already resident ({resident[name]} GB)"
@@ -108,8 +115,34 @@ def will_fit(name):
     return True, f"{name} needs about {needed:.1f} GB, {headroom:.1f} GB reachable"
 
 
+def switch(name, force=False):
+    """Alias for use(), reading better in a benchmark loop."""
+    return use(name, force=force)
+
+
+class model:
+    """Context manager: evict everything else, run the block, then free.
+
+        with model("phi4"):
+            ...
+    """
+
+    def __init__(self, name, force=False, release=True):
+        self.name = name
+        self.force = force
+        self.release = release
+
+    def __enter__(self):
+        return use(self.name, force=self.force)
+
+    def __exit__(self, *exc):
+        if self.release:
+            unload(self.name)
+        return False
+
+
 def use(name, force=False):
-    """Make `name` the only resident model. Returns a status dict."""
+    """Make `name` the only resident model, preloaded. Returns a status dict."""
     fits, reason = will_fit(name)
     if not fits and not force:
         raise MemoryError(reason)
@@ -124,6 +157,7 @@ def use(name, force=False):
             "Timings taken now are not comparable with timings taken when it is not."
         )
 
+    started = time.monotonic()
     request = json.dumps({"model": name, "keep_alive": "30m"}).encode()
     urllib.request.urlopen(
         urllib.request.Request(
@@ -131,10 +165,17 @@ def use(name, force=False):
             data=request,
             headers={"Content-Type": "application/json"},
         ),
-        timeout=300,
+        timeout=600,
     ).read()
 
-    return {"model": name, "evicted": stopped, "note": reason, **memory()}
+    return {
+        "model": name,
+        "evicted": stopped,
+        "load_secs": round(time.monotonic() - started, 1),
+        "resident_gb": loaded().get(name),
+        "note": reason,
+        **memory(),
+    }
 
 
 def status():
@@ -164,7 +205,7 @@ if __name__ == "__main__":
     command = sys.argv[1] if len(sys.argv) > 1 else "status"
     if command == "status":
         status()
-    elif command == "use":
+    elif command in ("use", "switch"):
         print(json.dumps(use(sys.argv[2]), indent=2))
     elif command == "unload":
         print("evicted:", unload_all() or "(nothing was resident)")
