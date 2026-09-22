@@ -329,6 +329,8 @@ jupyter notebook notebooks/llm_endpoints.ipynb
 
 It expects the service on `localhost:5001`.
 
+Section 9 is a **scored** benchmark rather than a timing one: it pins down what the plan should contain for queries whose answer is not in doubt, then reports accuracy alongside speed for every model you have pulled. A fast model that puts the age in the wrong place is worse than a slow one that gets it right, so rank on accuracy first.
+
 ### Tests
 
 ```bash
