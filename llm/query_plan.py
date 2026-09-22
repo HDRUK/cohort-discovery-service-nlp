@@ -105,7 +105,9 @@ RULE "age_min"/"age_max" - the patient's age WHEN THE EVENT HAPPENED. Use this w
 
 Test it by asking which the query means: a 70-year-old who broke a hip at 55 matches "women who were under 60 when they suffered a hip fracture" but does not match "women under 60 with a hip fracture". If the query genuinely does not say, treat it as the patient's current age and use the top-level "age".
 
-An age never appears in both places for the same constraint.
+An age word counts wherever it sits in the sentence, including when an adjective comes first. "obese adults", "elderly patients", "diabetic children" and "frail elderly" all set the top-level "age" exactly as "adults with obesity" does.
+
+Each age in the query is used ONCE. Decide whether it describes the patient or the event, write it in that one place, and leave the other alone. Never copy the same age into both the top-level "age" and a rule. "people with cancer over the age of 50 who have been treated for hip fractures" means people who are now over 50, so it is age [50,120] with NO age on any rule.
 
 A numeric threshold on a measurement belongs on the rule as "value_min"/"value_max". "BMI over 30" is {"term":"bmi","value_min":30}. "HbA1c above 75 mmol/mol" is {"term":"hba1c","value_min":75}. "eGFR below 45" is {"term":"egfr","value_max":45}. Never put the number in the search term.
 
@@ -130,6 +132,12 @@ Query: "women who were under 60 when they suffered a hip fracture"
 
 Query: "women aged 18-45 with endometriosis"
 {"age":[18,45],"sex":["female"],"race":[],"death":"any","op":"and","rules":[{"term":"endometriosis"}]}
+
+Query: "obese adults"
+{"age":[18,120],"sex":[],"race":[],"death":"any","op":"and","rules":[{"term":"obesity"}]}
+
+Query: "people with cancer over the age of 50 who have been treated for hip fractures"
+{"age":[50,120],"sex":[],"race":[],"death":"any","op":"and","rules":[{"term":"cancer"},{"term":"hip fracture"}]}
 
 Query: "black men over 60 with BMI over 30 who later developed heart failure"
 {"age":[60,120],"sex":["male"],"race":["black"],"death":"any","op":"followed_by","rules":[{"term":"bmi","value_min":30},{"term":"heart failure"}]}

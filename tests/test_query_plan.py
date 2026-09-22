@@ -300,3 +300,24 @@ def test_rules_without_constraints_stay_clean():
     assert "ageConstraint" not in leaf
     assert "valueAsNumber" not in leaf
     assert "timeConstraint" not in leaf
+
+
+def test_age_is_never_applied_in_both_places():
+    """A plan that double-counts an age must not produce two constraints."""
+    tree = plan_to_tree(
+        {"age": [50, 120], "sex": [], "op": "and",
+         "rules": [{"term": "cancer"}, {"term": "hip fracture", "age_min": 50}]}
+    )
+
+    assert tree["demographics"]["age"] == [50, 120]
+    assert tree["rules"][2]["ageConstraint"] == [50, None]
+
+
+def test_both_interpretations_are_reported_when_a_plan_uses_both():
+    from llm.query_plan import interpretation_warnings
+
+    warnings = interpretation_warnings(
+        {"age": [50, 120], "rules": [{"term": "hip fracture", "age_min": 50}]}
+    )
+
+    assert len(warnings) == 2
