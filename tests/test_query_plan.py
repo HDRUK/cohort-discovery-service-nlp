@@ -170,8 +170,8 @@ def test_last_months_on_a_rule_becomes_a_leaf_time_constraint():
     )
 
     leaf = tree["rules"][0]
-    assert leaf["timeConstraint"][1] is None
     assert leaf["timeConstraint"][0].startswith(str(_expected_year(24)))
+    assert leaf["timeConstraint"][1].startswith(str(_expected_year(0)))
 
 
 def _expected_year(months):
@@ -186,7 +186,7 @@ def test_top_level_last_months_becomes_a_root_constraint():
     )
 
     assert tree["constraints"]["timeConstraint"][0] is not None
-    assert tree["constraints"]["timeConstraint"][1] is None
+    assert tree["constraints"]["timeConstraint"][1] is not None
 
 
 def test_rules_without_a_window_have_no_time_constraint():
@@ -215,3 +215,88 @@ def test_group_can_carry_a_time_constraint():
     )
 
     assert tree["rules"][0]["timeConstraint"][0] is not None
+
+
+def test_race_maps_to_omop_race_concepts():
+    tree = plan_to_tree({"age": [0, 120], "sex": [], "race": ["black"], "rules": []})
+
+    assert tree["demographics"]["race"] == [
+        {"concept_id": 8516, "name": "Black or African American", "category": "Race"}
+    ]
+
+
+def test_unknown_race_is_dropped():
+    tree = plan_to_tree({"age": [0, 120], "sex": [], "race": ["martian"], "rules": []})
+
+    assert tree["demographics"]["race"] == []
+
+
+def test_rule_age_becomes_an_age_constraint_not_demographics():
+    tree = plan_to_tree(
+        {"age": [0, 120], "sex": ["female"], "op": "and",
+         "rules": [{"term": "hip fracture", "age_max": 60}]}
+    )
+
+    assert tree["demographics"]["age"] == [0, 120]
+    assert tree["rules"][0]["ageConstraint"] == [None, 60]
+    assert tree["rules"][0]["ageConstraintOperator"] == "<"
+
+
+def test_lower_bound_age_constraint_uses_the_gte_operator():
+    tree = plan_to_tree(
+        {"age": [0, 120], "sex": [], "op": "and",
+         "rules": [{"term": "stroke", "age_min": 40}]}
+    )
+
+    assert tree["rules"][0]["ageConstraint"] == [40, None]
+    assert tree["rules"][0]["ageConstraintOperator"] == "≥"
+
+
+def test_value_threshold_becomes_value_as_number():
+    tree = plan_to_tree(
+        {"age": [0, 120], "sex": [], "op": "and",
+         "rules": [{"term": "bmi", "value_min": 30}]}
+    )
+
+    assert tree["rules"][0]["valueAsNumber"] == [30, None]
+    assert tree["rules"][0]["valueAsNumberOperator"] == "≥"
+
+
+def test_value_upper_bound_uses_the_less_than_operator():
+    tree = plan_to_tree(
+        {"age": [0, 120], "sex": [], "op": "and",
+         "rules": [{"term": "egfr", "value_max": 45}]}
+    )
+
+    assert tree["rules"][0]["valueAsNumber"] == [None, 45]
+    assert tree["rules"][0]["valueAsNumberOperator"] == "<"
+
+
+def test_value_range_uses_the_between_operator():
+    tree = plan_to_tree(
+        {"age": [0, 120], "sex": [], "op": "and",
+         "rules": [{"term": "hba1c", "value_min": 48, "value_max": 75}]}
+    )
+
+    assert tree["rules"][0]["valueAsNumber"] == [48, 75]
+    assert tree["rules"][0]["valueAsNumberOperator"] == "↔"
+
+
+def test_followed_by_is_emitted_as_a_combinator():
+    tree = plan_to_tree(
+        {"age": [0, 120], "sex": [], "op": "followed_by",
+         "rules": [{"term": "pcos"}, {"term": "type 2 diabetes"}]}
+    )
+
+    assert tree["rules"][1]["combinator"] == "followed_by"
+
+
+def test_rules_without_constraints_stay_clean():
+    tree = plan_to_tree(
+        {"age": [0, 120], "sex": [], "op": "or", "rules": [{"term": "asthma"}]}
+    )
+
+    leaf = tree["rules"][0]
+    assert "ageConstraint" not in leaf
+    assert "valueAsNumber" not in leaf
+    assert "timeConstraint" not in leaf

@@ -232,3 +232,136 @@ def test_body_field_still_applies_when_the_query_param_is_absent():
         )
 
     assert mock_search.call_count == 0
+
+
+def test_unsupported_features_in_the_query_are_warned_about():
+    with _client():
+        response = client.post(
+            "/llm/parse",
+            json={"query": "adults with asthma admitted to hospital in NHS Scotland"},
+        )
+
+    warnings = response.json()["warnings"]
+    assert any("Visit-based filtering" in w for w in warnings)
+    assert any("Location-based filtering" in w for w in warnings)
+
+
+def test_unsupported_warnings_are_emitted_without_resolution():
+    with _client():
+        response = client.post(
+            "/llm/parse?fill_concepts=false",
+            json={"query": "people with copd who later developed heart failure"},
+        )
+
+    body = response.json()
+    assert any("Temporal sequencing" in w for w in body["warnings"])
+    assert body["tree"]["warnings"] == body["warnings"]
+
+
+def test_clean_query_produces_no_unsupported_warnings():
+    with _client():
+        response = client.post(
+            "/llm/parse?fill_concepts=false", json={"query": "adults with asthma"}
+        )
+
+    warnings = response.json()["warnings"]
+    assert not any("not currently supported" in w for w in warnings)
+
+
+def test_current_age_interpretation_is_reported():
+    with _client():
+        response = client.post(
+            "/llm/parse?fill_concepts=false", json={"query": "adults with cancer"}
+        )
+
+    assert any(
+        "current age >= 18" in w for w in response.json()["warnings"]
+    )
+
+
+def test_age_at_event_interpretation_is_reported():
+    plan = {
+        "age": [0, 120], "sex": ["female"], "race": [], "death": "any", "op": "and",
+        "rules": [{"term": "hip fracture", "age_max": 60}],
+    }
+    with _client(StubOllamaClient(plan)):
+        response = client.post(
+            "/llm/parse?fill_concepts=false",
+            json={"query": "women who were under 60 when they suffered a hip fracture"},
+        )
+
+    warnings = response.json()["warnings"]
+    assert any("age when the event was recorded" in w for w in warnings)
+    assert not any(
+        "interpreted as the patient's current age" in w for w in warnings
+    )
+
+
+class StubModelsClient(StubOllamaClient):
+    def __init__(self, available=None, loaded=None, error=None):
+        super().__init__()
+        self._available = available if available is not None else [
+            {"name": "qwen3:8b", "size_gb": 5.23, "parameter_size": "8.2B",
+             "quantization": "Q4_K_M", "modified_at": "2026-09-21T10:00:00Z"},
+            {"name": "qwen3:0.6b", "size_gb": 0.52, "parameter_size": "0.6B",
+             "quantization": "Q4_K_M", "modified_at": "2026-09-20T10:00:00Z"},
+        ]
+        self._loaded = loaded if loaded is not None else [
+            {"name": "qwen3:8b", "size_gb": 5.5, "expires_at": "2026-09-21T10:30:00Z"}
+        ]
+        self._models_error = error
+
+    def list_models(self):
+        if self._models_error:
+            raise self._models_error
+        return self._available
+
+    def loaded_models(self):
+        return self._loaded
+
+
+def test_models_endpoint_lists_available_models():
+    with _client(StubModelsClient()):
+        response = client.get("/llm/models")
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["total"] == 2
+    assert body["default"] == "qwen3:8b"
+    assert [m["name"] for m in body["models"]] == ["qwen3:8b", "qwen3:0.6b"]
+
+
+def test_models_endpoint_flags_which_are_loaded():
+    with _client(StubModelsClient()):
+        body = client.get("/llm/models").json()
+
+    loaded = {m["name"]: m["loaded"] for m in body["models"]}
+    assert loaded == {"qwen3:8b": True, "qwen3:0.6b": False}
+    assert body["loaded"][0]["expires_at"] == "2026-09-21T10:30:00Z"
+
+
+def test_models_endpoint_503_when_ollama_not_configured():
+    previous = getattr(app.state, "ollama_client", None)
+    app.state.ollama_client = None
+    try:
+        response = client.get("/llm/models")
+    finally:
+        app.state.ollama_client = previous
+
+    assert response.status_code == 503
+
+
+def test_models_endpoint_502_when_ollama_errors():
+    with _client(StubModelsClient(error=ValueError("connection refused"))):
+        response = client.get("/llm/models")
+
+    assert response.status_code == 502
+    assert "connection refused" in response.json()["detail"]
+
+
+def test_models_endpoint_handles_no_models_pulled():
+    with _client(StubModelsClient(available=[], loaded=[])):
+        body = client.get("/llm/models").json()
+
+    assert body["total"] == 0
+    assert body["models"] == []

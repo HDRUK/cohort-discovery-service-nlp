@@ -6,8 +6,9 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from llm.concept_filler import fill_concepts as resolve_tree_concepts
-from llm.query_plan import plan_to_tree
+from llm.query_plan import interpretation_warnings, plan_to_tree
 from logging_config import get_logger
+from rules_engine import RuleEngine
 
 log = get_logger()
 
@@ -15,6 +16,8 @@ router = APIRouter()
 
 DEFAULT_THRESHOLD = int(os.getenv("DEFAULT_THRESHOLD", 90))
 DEFAULT_MAX_MATCHES = 10
+
+ENGINE = RuleEngine()
 
 
 class LLMParseRequest(BaseModel):
@@ -29,6 +32,36 @@ def _select_resolver(request: Request) -> Any:
     if getattr(state, "backend", "sql") == "fuzzy" and store.fully_warm:
         return store.resolver
     return state.sql_resolver
+
+
+@router.get("/llm/models")
+def llm_models(request: Request) -> Dict[str, Any]:
+    client = getattr(request.app.state, "ollama_client", None)
+    if client is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Ollama is not configured. Set OLLAMA_URL to enable POST /llm/parse.",
+        )
+
+    try:
+        available = client.list_models()
+        loaded = client.loaded_models()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Ollama request failed: {e}",
+        ) from e
+
+    loaded_names = {m["name"] for m in loaded}
+    for entry in available:
+        entry["loaded"] = entry["name"] in loaded_names
+
+    return {
+        "default": client.model,
+        "total": len(available),
+        "models": available,
+        "loaded": loaded,
+    }
 
 
 @router.post("/llm/parse")
@@ -74,19 +107,26 @@ def llm_parse(
     llm_ms = (time.monotonic() - t0) * 1000
 
     tree = plan_to_tree(plan)
+    unsupported = ENGINE.warnings_for_features(
+        ENGINE.find_unsupported_features(payload.query)
+    )
+    unsupported += interpretation_warnings(plan)
 
     resolve_ms = 0.0
-    warnings: list = []
+    warnings: list = list(unsupported)
     if should_fill:
         t1 = time.monotonic()
-        tree, warnings = resolve_tree_concepts(
+        tree, resolve_warnings = resolve_tree_concepts(
             tree,
             _select_resolver(request),
             threshold,
             phrase_first=phrase_first,
             max_matches=max_matches,
         )
+        warnings = warnings + resolve_warnings
         resolve_ms = (time.monotonic() - t1) * 1000
+
+    tree["warnings"] = warnings
 
     log.info(
         f"[/llm/parse] query='{payload.query}' model={model} "

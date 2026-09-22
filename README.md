@@ -143,13 +143,123 @@ curl -X POST http://localhost:5001/extract \
 }
 ```
 
-## LLM models (experimental `POST /llm/parse`)
+## Experimental: LLM-backed query parsing
 
-The experimental `POST /llm/parse` endpoint uses a **local** LLM, served by [Ollama](https://ollama.com), to turn a query into the query-builder JSON structure. The model only decides the structure — which terms are OR'd, what nests, what is a demographic — and leaves every OMOP concept blank for the existing resolver to fill.
+`POST /llm/parse` uses a **local** LLM, served by [Ollama](https://ollama.com), to turn free text into the query-builder JSON the UI renders.
 
-Nothing here is required to run the service. If `OLLAMA_URL` is unset, `/llm/parse` returns `503` and every other endpoint behaves exactly as before.
+The split is deliberate. The model decides the **structure** — which terms are OR'd, what nests, what is a demographic rather than a clinical term, whether an age describes the patient or the event. The existing concept resolver decides the **concepts**: the model never sees or invents an OMOP `concept_id`, it emits search terms with the concept slot left blank and `resolver.search()` fills them in.
 
-See [docs/ollama-poc.md](docs/ollama-poc.md) for the design and the full API.
+Nothing here is required to run the service. With `OLLAMA_URL` unset, `/llm/parse` returns `503` and every other endpoint behaves exactly as before. No new dependency: `httpx` is already present for MedCAT.
+
+### Endpoints
+
+`GET /llm/models` — what is pulled, and what is currently resident in memory.
+
+```bash
+curl -s localhost:5001/llm/models | python3 -m json.tool
+```
+
+```json
+{
+  "default": "qwen3:8b",
+  "total": 3,
+  "models": [
+    { "name": "qwen3:8b", "size_gb": 5.23, "parameter_size": "8.2B",
+      "quantization": "Q4_K_M", "loaded": true }
+  ],
+  "loaded": [
+    { "name": "qwen3:8b", "size_gb": 5.5, "expires_at": "2026-09-22T13:04:11Z" }
+  ]
+}
+```
+
+`POST /llm/parse` — parse a query.
+
+```bash
+# structure only: no database calls, every concept left null
+curl -s 'localhost:5001/llm/parse?fill_concepts=false' \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"adults with cancer or diabetes"}' | python3 -m json.tool
+
+# full path: concepts resolved
+curl -s localhost:5001/llm/parse \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"adults with cancer or diabetes"}' | python3 -m json.tool
+
+# compare a different model without restarting
+curl -s localhost:5001/llm/parse \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"adults with cancer or diabetes","model":"qwen3:14b"}'
+```
+
+Body: `query` (required), `fill_concepts` (default `true`), `model` (optional override).
+Query params: `fill_concepts` (overrides the body field), `threshold`, `phrase_first`, `max_matches` (default 10 — the best match plus up to nine alternatives).
+
+The response returns the raw model output alongside the converted tree, so when something looks wrong you can tell immediately whether the model or the conversion is at fault:
+
+```json
+{
+  "plan": { "...": "what the model emitted" },
+  "tree": { "...": "query-builder JSON" },
+  "warnings": [],
+  "model": "qwen3:8b",
+  "duration_ms": { "llm": 4360.4, "resolve": 304.7 }
+}
+```
+
+### How it works
+
+```
+query string
+     │
+     ▼  llm/ollama_client.py — POST /api/chat with format=<JSON schema>
+   plan      compact: {age, sex, race, death, op, rules}
+     │
+     ▼  llm/query_plan.py — plan_to_tree(), a pure function
+   tree      query-builder JSON: uuids minted, operators interleaved,
+             constraints applied, every rule.concept = null
+     │
+     ▼  llm/concept_filler.py — resolver.search() per leaf, in a thread pool
+   tree      rule.concept = best match, .alternatives = the rest
+```
+
+The model does **not** emit the query-builder tree directly. It emits a compact intermediate plan which Python converts. UUID minting and infix operator interleaving are mechanical and belong in code; Ollama compiles the response schema into a GBNF grammar where recursive schemas are unreliable but a flat one is not; and a pure conversion function is testable with no model and no database.
+
+### What the plan can express
+
+| Plan field | Becomes | Example query |
+|---|---|---|
+| `age` | `demographics.age` | "adults with asthma" |
+| `sex` | `demographics.sex` (8507/8532) | "women with endometriosis" |
+| `race` | `demographics.race` (8516/8527/8515/8657/8557) | "black men over 60" |
+| `death` | `demographics.death` | "people who died", "still alive" |
+| `op` | operator nodes: `and` / `or` / `followed_by` | "cancer or diabetes" |
+| `rules[].term` | a leaf with `rule.concept` blank | "asthma" |
+| `rules[].not` | `exclude: true` | "without eczema" |
+| `rules[].terms` + `op` | a nested group | "insulin (glargine or detemir)" |
+| `rules[].last_months` | `timeConstraint: [now-N, now]` | "in the last 2 years" |
+| `rules[].age_min/max` | `ageConstraint` + `≥`/`<` | "under 60 when they fractured a hip" |
+| `rules[].value_min/max` | `valueAsNumber` + `≥`/`<`/`↔` | "BMI over 30", "eGFR below 45" |
+
+Not modelled: `location` (geographic filtering), occurrence counts ("2+ courses"), and consecutive-day windows.
+
+### Current age vs age at the event
+
+This is the judgement the prompt spends most effort on, because the two readings give different cohorts:
+
+- **"women aged 18-45 with endometriosis"** — the age describes the *patient*, so it goes in `demographics.age`.
+- **"women who were under 60 when they suffered a hip fracture"** — the age is tied to the *event* by "when", so it becomes `ageConstraint` on the hip-fracture rule.
+
+A 70-year-old who broke a hip at 55 matches the second but not the first. When a query genuinely does not say, the plan falls back to current age, matching the existing pipeline.
+
+Either way the endpoint reports which reading it took, in the same style as the Laravel parser's own warnings:
+
+```
+Age interpreted as the patient's current age >= 18. Please modify from the query builder if needed.
+Age for "hip fracture" interpreted as the patient's age when the event was recorded <= 60, not their current age. Please modify from the query builder if needed.
+```
+
+`/llm/parse` also reuses `RuleEngine`'s existing `unsupported_patterns`, so queries mentioning visits, locations, temporal sequencing or measurement values get the same warnings `/extract` already emits.
 
 ### Install and start Ollama
 
@@ -159,15 +269,13 @@ ollama serve                 # foreground, or just launch Ollama.app
 curl -s localhost:11434/api/version   # confirm it is listening
 ```
 
-Ollama listens on `127.0.0.1:11434` by default and runs as a background service once started.
-
 ### Pull a model
 
 ```bash
 ollama pull qwen3:8b         # 5.2 GB — the default
 ```
 
-`ollama pull` is resumable: if it stalls, re-run the same command and it continues from where it stopped. Be aware that **it exits 0 even when the download fails**, so check `ollama list` rather than trusting the exit code.
+`ollama pull` is resumable: if it stalls, re-run the same command and it continues. Be aware that **it exits 0 even when the download fails**, so check `ollama list` or `GET /llm/models` rather than trusting the exit code.
 
 ### Manage models
 
@@ -180,38 +288,53 @@ ollama rm qwen3:0.6b         # delete from disk
 
 Models load into memory on first use and stay resident for `OLLAMA_KEEP_ALIVE` (default `30m` here; Ollama's own default is 5 minutes). A cold load costs 10-30 s on the next request, which is why the service asks for a longer window.
 
-### Choosing a model
-
 | Model | Size | Notes |
 |---|---|---|
-| `qwen3:8b` | 5.2 GB | Default. Handles nested groups, negation, age bands and time windows correctly. |
+| `qwen3:8b` | 5.2 GB | Default. Handles nested groups, negation, age bands, thresholds and time windows. |
 | `qwen3:14b` | 9.3 GB | Better on ambiguous phrasing, roughly 2x slower. |
-| `qwen3:0.6b` | 0.5 GB | Too small for real use — it misreads age bands. Useful only as a plumbing smoke test. |
-
-A *smaller* model is not automatically faster here. Response time is dominated by the number of output tokens, and `qwen3:4b` was measured emitting **more** tokens than `qwen3:8b` for the same queries, making it no quicker overall.
-
-You can compare models per request without restarting the service:
-
-```bash
-curl -s localhost:5001/llm/parse -H 'Content-Type: application/json' \
-  -d '{"query":"adults with cancer or diabetes","model":"qwen3:14b"}'
-```
+| `qwen3:0.6b` | 0.5 GB | Too small for real use — it misreads age bands. A plumbing smoke test only. |
 
 ### Configuration
 
 ```bash
-OLLAMA_URL=http://localhost:11434   # unset disables /llm/parse entirely
+OLLAMA_URL=http://localhost:11434   # unset disables /llm/parse and /llm/models entirely
 OLLAMA_MODEL=qwen3:8b               # default model
 OLLAMA_TIMEOUT=120                  # seconds
 OLLAMA_KEEP_ALIVE=30m               # how long the model stays resident
 ```
 
-### If it is slow
+### Speed
 
-Check, in order:
+Generation dominates. A typical request profiles as ~10 ms model load, ~150 ms prompt eval for ~600 input tokens, and the remainder generating ~35 output tokens. Prompt size is almost free; **output tokens are the cost**. Hence:
 
-1. `ollama ps` — if the model is absent it will cold-load on the next call. `PROCESSOR` should read `100% GPU`; any CPU share means it did not fit in VRAM.
-2. `sysctl vm.swapusage` — heavy swap is the usual culprit on a developer machine. The same query measured 3x slower (8 tok/s against 24) with 34 GB of swap in use from other applications.
-3. The response body's `duration_ms` splits LLM time from concept-resolution time, so you can see which half is slow.
+1. **Thinking is disabled.** `qwen3` is a hybrid-reasoning model and, left to reason, it spent **112.7 s against 6.1 s for byte-identical output** — 9181 characters of reasoning that changed nothing. The client sends `"think": false` and falls back automatically for models with no thinking mode.
+2. **The plan is compact.** The model copies the formatting of the examples it is shown, so pretty-printed examples made it emit whitespace tokens. Compacting them and trimming redundant fields took output from 112 tokens to 35.
+3. **`keep_alive`** avoids a 10-30 s cold load on every request after a gap.
 
-Thinking is disabled deliberately. `qwen3` is a hybrid-reasoning model, and left to reason it spent **112 s against 6 s for byte-identical output**. The client sends `"think": false`, falling back automatically for models that have no thinking mode.
+Two things measured as *not* worth doing:
+
+- **A smaller model does not help.** `qwen3:4b` emitted *more* tokens than `qwen3:8b` for the same queries (144 vs 85) and was no faster. When generation is the bottleneck, a chattier small model loses.
+- **The JSON schema costs nothing.** A full schema, `format: "json"`, and no format at all all measured within noise of each other.
+
+If generation drops below ~20 tok/s on Apple silicon, suspect the machine rather than the model — check `sysctl vm.swapusage`. Under heavy swap the same query measured 3x slower (8 tok/s against 24). The response's `duration_ms` splits LLM time from resolution time so you can see which half is slow.
+
+### Notebook
+
+[`notebooks/llm_endpoints.ipynb`](notebooks/llm_endpoints.ipynb) is a sandbox for both endpoints. It opens with the full set of test queries — simple and advanced, annotated with the known ambiguities and the cases the platform cannot support — then walks through listing models, parsing a single query, the current-age vs age-at-event distinction, running the whole set into a DataFrame, and comparing against `/extract`.
+
+```bash
+pip install jupyter pandas
+jupyter notebook notebooks/llm_endpoints.ipynb
+```
+
+It expects the service on `localhost:5001`.
+
+### Tests
+
+```bash
+pytest tests/test_query_plan.py    # plan_to_tree, no model, no DB
+pytest tests/test_llm_router.py    # endpoints, model and resolver both mocked
+pytest tests/test_ollama_client.py # request shape, thinking fallback, error handling
+```
+
+None of these need Ollama running or a database.

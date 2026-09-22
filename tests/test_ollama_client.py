@@ -48,7 +48,7 @@ def test_schema_and_zero_temperature_are_sent():
     body = post.call_args[1]["json"]
     assert body["stream"] is False
     assert body["options"]["temperature"] == 0
-    assert body["format"]["required"] == ["age", "sex", "death", "op", "rules"]
+    assert body["format"]["required"] == ["age", "sex", "race", "death", "op", "rules"]
 
 
 def test_per_request_model_overrides_the_default():

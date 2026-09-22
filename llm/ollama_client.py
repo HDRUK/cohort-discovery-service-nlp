@@ -1,6 +1,6 @@
 import json
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -50,6 +50,39 @@ class OllamaClient:
         if think is not None:
             body["think"] = think
         return httpx.post(f"{self._url}/api/chat", json=body, timeout=self._timeout)
+
+    def list_models(self) -> List[Dict[str, Any]]:
+        response = httpx.get(f"{self._url}/api/tags", timeout=self._timeout)
+        if response.status_code != 200:
+            raise ValueError(
+                f"Ollama returned HTTP {response.status_code}: {response.text.strip()}"
+            )
+        models = []
+        for entry in response.json().get("models") or []:
+            details = entry.get("details") or {}
+            models.append(
+                {
+                    "name": entry.get("name"),
+                    "size_gb": round((entry.get("size") or 0) / 1e9, 2),
+                    "parameter_size": details.get("parameter_size"),
+                    "quantization": details.get("quantization_level"),
+                    "modified_at": entry.get("modified_at"),
+                }
+            )
+        return sorted(models, key=lambda m: m["name"] or "")
+
+    def loaded_models(self) -> List[Dict[str, Any]]:
+        response = httpx.get(f"{self._url}/api/ps", timeout=self._timeout)
+        if response.status_code != 200:
+            return []
+        return [
+            {
+                "name": entry.get("name"),
+                "size_gb": round((entry.get("size") or 0) / 1e9, 2),
+                "expires_at": entry.get("expires_at"),
+            }
+            for entry in response.json().get("models") or []
+        ]
 
     def plan(self, query: str, model: Optional[str] = None) -> Dict[str, Any]:
         chosen = model or self._model
