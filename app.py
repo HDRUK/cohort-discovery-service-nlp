@@ -14,6 +14,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import URL as EngineURL
 
 from concepts import router as concepts_router
+from llm import OllamaClient
+from llm.router import router as llm_router
 from loaders.ancestors import load_ancestor_map
 from loaders.concepts import load_concepts_from_mysql
 from loaders.synonyms import build_synonym_token_index, load_synonym_map
@@ -235,6 +237,18 @@ async def lifespan(app: FastAPI):
     )
     app.state.medcat_client = medcat_client
 
+    ollama_url = os.getenv("OLLAMA_URL", "").strip()
+    app.state.ollama_client = (
+        OllamaClient(
+            url=ollama_url,
+            model=os.getenv("OLLAMA_MODEL", "qwen3:8b"),
+            timeout=float(os.getenv("OLLAMA_TIMEOUT", "120")),
+            keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "30m"),
+        )
+        if ollama_url
+        else None
+    )
+
     app.state.sql_resolver = MySQLConceptResolver(db_engine, store, medcat_client)
     app.state.backend = RESOLVER_BACKEND
 
@@ -260,6 +274,7 @@ def get_resolver_store(request: Request) -> ResolverStore:
 # FastAPI app
 app = FastAPI(title="Project Daphne NLP Service", version="1.0", lifespan=lifespan)
 app.include_router(concepts_router)
+app.include_router(llm_router)
 
 
 @app.middleware("http")

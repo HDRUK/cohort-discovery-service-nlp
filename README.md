@@ -142,3 +142,76 @@ curl -X POST http://localhost:5001/extract \
   ]
 }
 ```
+
+## LLM models (experimental `POST /llm/parse`)
+
+The experimental `POST /llm/parse` endpoint uses a **local** LLM, served by [Ollama](https://ollama.com), to turn a query into the query-builder JSON structure. The model only decides the structure — which terms are OR'd, what nests, what is a demographic — and leaves every OMOP concept blank for the existing resolver to fill.
+
+Nothing here is required to run the service. If `OLLAMA_URL` is unset, `/llm/parse` returns `503` and every other endpoint behaves exactly as before.
+
+See [docs/ollama-poc.md](docs/ollama-poc.md) for the design and the full API.
+
+### Install and start Ollama
+
+```bash
+brew install ollama          # macOS; see ollama.com/download for other platforms
+ollama serve                 # foreground, or just launch Ollama.app
+curl -s localhost:11434/api/version   # confirm it is listening
+```
+
+Ollama listens on `127.0.0.1:11434` by default and runs as a background service once started.
+
+### Pull a model
+
+```bash
+ollama pull qwen3:8b         # 5.2 GB — the default
+```
+
+`ollama pull` is resumable: if it stalls, re-run the same command and it continues from where it stopped. Be aware that **it exits 0 even when the download fails**, so check `ollama list` rather than trusting the exit code.
+
+### Manage models
+
+```bash
+ollama list                  # models on disk
+ollama ps                    # models currently loaded in memory, and when they unload
+ollama stop qwen3:8b         # unload from memory now (stays on disk)
+ollama rm qwen3:0.6b         # delete from disk
+```
+
+Models load into memory on first use and stay resident for `OLLAMA_KEEP_ALIVE` (default `30m` here; Ollama's own default is 5 minutes). A cold load costs 10-30 s on the next request, which is why the service asks for a longer window.
+
+### Choosing a model
+
+| Model | Size | Notes |
+|---|---|---|
+| `qwen3:8b` | 5.2 GB | Default. Handles nested groups, negation, age bands and time windows correctly. |
+| `qwen3:14b` | 9.3 GB | Better on ambiguous phrasing, roughly 2x slower. |
+| `qwen3:0.6b` | 0.5 GB | Too small for real use — it misreads age bands. Useful only as a plumbing smoke test. |
+
+A *smaller* model is not automatically faster here. Response time is dominated by the number of output tokens, and `qwen3:4b` was measured emitting **more** tokens than `qwen3:8b` for the same queries, making it no quicker overall.
+
+You can compare models per request without restarting the service:
+
+```bash
+curl -s localhost:5001/llm/parse -H 'Content-Type: application/json' \
+  -d '{"query":"adults with cancer or diabetes","model":"qwen3:14b"}'
+```
+
+### Configuration
+
+```bash
+OLLAMA_URL=http://localhost:11434   # unset disables /llm/parse entirely
+OLLAMA_MODEL=qwen3:8b               # default model
+OLLAMA_TIMEOUT=120                  # seconds
+OLLAMA_KEEP_ALIVE=30m               # how long the model stays resident
+```
+
+### If it is slow
+
+Check, in order:
+
+1. `ollama ps` — if the model is absent it will cold-load on the next call. `PROCESSOR` should read `100% GPU`; any CPU share means it did not fit in VRAM.
+2. `sysctl vm.swapusage` — heavy swap is the usual culprit on a developer machine. The same query measured 3x slower (8 tok/s against 24) with 34 GB of swap in use from other applications.
+3. The response body's `duration_ms` splits LLM time from concept-resolution time, so you can see which half is slow.
+
+Thinking is disabled deliberately. `qwen3` is a hybrid-reasoning model, and left to reason it spent **112 s against 6 s for byte-identical output**. The client sends `"think": false`, falling back automatically for models that have no thinking mode.
