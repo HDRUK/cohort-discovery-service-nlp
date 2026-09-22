@@ -294,6 +294,26 @@ Models load into memory on first use and stay resident for `OLLAMA_KEEP_ALIVE` (
 | `qwen3:14b` | 9.3 GB | Better on ambiguous phrasing, roughly 2x slower. |
 | `qwen3:0.6b` | 0.5 GB | Too small for real use — it misreads age bands. A plumbing smoke test only. |
 
+### Keeping memory under control
+
+Ollama keeps **up to 3 models resident at once** by default, which on a 36 GB machine is how you end up in swap. Cap it at one:
+
+```bash
+launchctl setenv OLLAMA_MAX_LOADED_MODELS 1     # Ollama.app
+```
+
+For a Homebrew-managed install, add it under `EnvironmentVariables` in `~/Library/LaunchAgents/sh.brew.ollama.plist` and `brew services restart ollama`.
+
+`notebooks/model_manager.py` enforces the same thing per-request and refuses a load that will not fit, rather than letting the machine swap:
+
+```bash
+python notebooks/model_manager.py status        # RAM, swap, resident, what would fit
+python notebooks/model_manager.py use qwen3:8b  # evict the rest, preload this one
+python notebooks/model_manager.py unload        # free everything
+```
+
+Generation slows by roughly 3x once the machine is swapping, so a benchmark run taken under pressure is not comparable with one taken without it. `status()` reports swap so you can tell the difference.
+
 ### Configuration
 
 ```bash
