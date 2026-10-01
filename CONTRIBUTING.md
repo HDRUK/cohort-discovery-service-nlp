@@ -4,6 +4,7 @@ Thanks for contributing to this project. This guide covers local setup, testing,
 
 **Prerequisites**
 - Python 3.11
+- [uv](https://docs.astral.sh/uv/) for Python dependency management
 - Node.js and npm (for workflow linting and release tooling)
 - Docker (for local builds and container tests)
 - Access to the required secrets for deployment workflows
@@ -15,14 +16,13 @@ Thanks for contributing to this project. This guide covers local setup, testing,
 - `.github/workflows/`: CI and deployment workflows
 
 **Local Setup**
-1. Create a virtual environment.
-2. Install Python dependencies.
-3. Copy `.env.example` to `.env` and update values.
-4. Install Node dependencies if you plan to run workflow linting.
+1. Install Python dependencies with `uv sync` (this also creates the virtual environment).
+2. Copy `.env.example` to `.env` and update values.
+3. Install Node dependencies if you plan to run workflow linting.
 
 **Common Commands**
 1. Run the API locally with your preferred ASGI server.
-2. Run Python tests with `pytest`.
+2. Run Python tests with `uv run pytest`.
 3. Run workflow linting with `npm run lint:workflows`.
 
 **Testing Expectations**
