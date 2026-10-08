@@ -1,3 +1,9 @@
+## [1.9.1](https://github.com/HDRUK/cohort-discovery-service-nlp/compare/v1.9.0...v1.9.1) (2026-10-08)
+
+### 🐛 Bug Fixes
+
+* **GAT-8645:** Updated Base OS version (#107) ([7137f40](https://github.com/HDRUK/cohort-discovery-service-nlp/commit/7137f40ecbc2da56eca74ebdc84c5e9fdb953fe1)), closes [GAT-8645](undefinedGAT-8645)
+
 ## [1.9.0](https://github.com/HDRUK/cohort-discovery-service-nlp/compare/v1.8.1...v1.9.0) (2026-09-16)
 
 ### ✨ Features
